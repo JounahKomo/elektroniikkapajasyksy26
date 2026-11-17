@@ -14,7 +14,10 @@ The objective of this project is to design and build a functional radiophone. Th
 
 - **Microcontroller**: STMicroelectronics STM32L432KC (ARM Cortex-M4 with FPU)
 - **Development Board**: [NUCLEO-L432KC](https://www.st.com/en/evaluation-tools/nucleo-l432kc.html) (Nucleo-32 form factor)
-- **Peripherals & RF Modules**: Microphones, audio amplifiers/speakers, PTT (Push-to-Talk) controls, and NRF24L01 2.4 GHz RF transceiver module.
+- **Peripherals & RF Modules**:
+  - NRF24L01 2.4 GHz RF transceiver module
+  - Grove Speaker v1.1 active speaker module (LM386 amplifier)
+  - Microphones, audio amplifiers, and PTT controls (integrated as development progresses)
 
 ### Software Stack & Tools
 
@@ -45,7 +48,8 @@ This project is developed with **Antigravity**, leveraging agentic AI workflows 
 │   │   ├── external_led.rs  # Blinks an external LED on D12 (PB4)
 │   │   ├── nrf24_test.rs    # NRF24L01 SPI communication and register verification test
 │   │   ├── nrf24_tx.rs      # NRF24L01 packet transmitter test (Enhanced ShockBurst TX)
-│   │   └── nrf24_rx.rs      # NRF24L01 packet receiver test (Enhanced ShockBurst RX)
+│   │   ├── nrf24_rx.rs      # NRF24L01 packet receiver test (Enhanced ShockBurst RX)
+│   │   └── speakers.rs      # Grove Speaker v1.1 PWM beep test (TIM1_CH1 on PA8)
 │   ├── lib.rs           # Library root exporting reusable modules
 │   ├── nrf24.rs         # NRF24L01 driver module (registers, TX/RX configuration, packet handling)
 │   └── main.rs          # Main radiophone firmware application
@@ -123,7 +127,19 @@ Connect the Nucleo-L432KC board via USB.
    ```
    Listens on Channel 76 (2476 MHz) for 32-byte packets, automatically sends hardware ACKs, logs payload text and raw hex bytes over RTT, and pulses the onboard LED on receipt.
 
-6. **Run the Main Firmware**:
+6. **Run the Grove Speaker Beep Test**:
+   Wiring connections for Grove Speaker v1.1:
+   - **VCC (Red)** -> +5V (Nucleo 5V supply, 4.0V–5.5V operating range)
+   - **GND (Black)** -> GND
+   - **NC** -> Not Connected
+   - **SIG (White/Yellow)** -> PA8 (D9, TIM1_CH1 PWM output)
+
+   ```bash
+   cargo run --bin speakers
+   ```
+   Generates a 1000 Hz square wave beep tone (300 ms on, 1000 ms off) via hardware timer PWM, with the onboard LED LD3 flashing in sync.
+
+7. **Run the Main Firmware**:
    ```bash
    cargo run
    ```
@@ -141,9 +157,9 @@ Connect the Nucleo-L432KC board via USB.
 - [x] External LED output demo (GPIO PB4)
 - [x] NRF24L01 SPI communication test and register verification
 - [x] NRF24L01 packet TX/RX driver and test programs (`nrf24_tx`, `nrf24_rx`)
+- [x] Audio playback test (PWM tone generator on PA8 / TIM1_CH1 with Grove Speaker v1.1)
 - [ ] Push-to-Talk (PTT) button input handling with debouncing
 - [ ] Audio capture (microphone ADC / I2S)
-- [ ] Audio playback (DAC / PWM / I2S audio amplifier)
 - [ ] Half-duplex transmit and receive state machine
 - [ ] Enclosure and final hardware assembly
 
