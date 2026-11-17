@@ -15,12 +15,16 @@ async fn main(_spawner: Spawner) {
 
     // Onboard green LED LD3 is connected to PB3 on Nucleo-32
     let mut led = Output::new(p.PB3, Level::Low, Speed::Low);
+    let mut count = 0u32;
 
     loop {
         led.set_high();
-        Timer::after(Duration::from_millis(200)).await;
+        Timer::after(Duration::from_millis(500)).await;
 
         led.set_low();
-        Timer::after(Duration::from_millis(200)).await;
+        Timer::after(Duration::from_millis(500)).await;
+
+        count += 1;
+        info!("Blinky is alive! Tick: {}", count);
     }
 }

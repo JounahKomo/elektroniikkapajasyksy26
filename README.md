@@ -14,7 +14,7 @@ The objective of this project is to design and build a functional radiophone. Th
 
 - **Microcontroller**: STMicroelectronics STM32L432KC (ARM Cortex-M4 with FPU)
 - **Development Board**: [NUCLEO-L432KC](https://www.st.com/en/evaluation-tools/nucleo-l432kc.html) (Nucleo-32 form factor)
-- **Peripherals & RF Modules**: Microphones, audio amplifiers/speakers, PTT (Push-to-Talk) controls, and RF transceiver modules (integrated as development progresses).
+- **Peripherals & RF Modules**: Microphones, audio amplifiers/speakers, PTT (Push-to-Talk) controls, and NRF24L01 2.4 GHz RF transceiver module.
 
 ### Software Stack & Tools
 
@@ -42,7 +42,8 @@ This project is developed with **Antigravity**, leveraging agentic AI workflows 
 ├── src/
 │   ├── bin/
 │   │   ├── blinky.rs        # Hardware bringup demo (blinks onboard LED LD3 on PB3)
-│   │   └── external_led.rs  # Blinks an external LED on D12 (PB4)
+│   │   ├── external_led.rs  # Blinks an external LED on D12 (PB4)
+│   │   └── nrf24_test.rs    # NRF24L01 SPI communication and register verification test
 │   └── main.rs          # Main radiophone firmware application
 ├── Cargo.toml           # Project manifest and dependencies
 └── README.md            # Project documentation
@@ -91,7 +92,22 @@ Connect the Nucleo-L432KC board via USB.
    ```
    This will flash and blink the external LED at 500 ms intervals.
 
-3. **Run the Main Firmware**:
+3. **Run the NRF24L01 SPI Test**:
+   Wiring connections:
+   - **VCC** -> 3.3V
+   - **GND** -> GND
+   - **CSN** -> PA11 (D10)
+   - **CE** -> PA8 (D9)
+   - **SCK** -> PA5 (A4)
+   - **MOSI** -> PA7 (A6)
+   - **MISO** -> PA6 (A5)
+
+   ```bash
+   cargo run --bin nrf24_test
+   ```
+   This binary reads internal registers (`CONFIG`, `STATUS`, `RF_CH`, `TX_ADDR`) and performs a register write/read-back verification to validate SPI communication over RTT defmt logs.
+
+4. **Run the Main Firmware**:
    ```bash
    cargo run
    ```
@@ -107,10 +123,11 @@ Connect the Nucleo-L432KC board via USB.
 - [x] Hardware setup and project template with Embassy on STM32L432KC
 - [x] Basic onboard LED blinking and defmt logging over RTT
 - [x] External LED output demo (GPIO PB4)
+- [x] NRF24L01 SPI communication test and register verification
 - [ ] Push-to-Talk (PTT) button input handling with debouncing
 - [ ] Audio capture (microphone ADC / I2S)
 - [ ] Audio playback (DAC / PWM / I2S audio amplifier)
-- [ ] RF transceiver interface (SPI / I2C module integration)
+- [ ] RF transceiver packet TX/RX driver
 - [ ] Half-duplex transmit and receive state machine
 - [ ] Enclosure and final hardware assembly
 
