@@ -18,6 +18,8 @@ embassy-stm32 = { version = "0.2", features = [
     "exti",
 ] }
 
+heapless = "0.8"
+
 # These MUST sit under [dependencies], NOT under [profile.release]
 defmt = "0.3"
 defmt-rtt = "0.4"

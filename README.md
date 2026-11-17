@@ -43,7 +43,11 @@ This project is developed with **Antigravity**, leveraging agentic AI workflows 
 │   ├── bin/
 │   │   ├── blinky.rs        # Hardware bringup demo (blinks onboard LED LD3 on PB3)
 │   │   ├── external_led.rs  # Blinks an external LED on D12 (PB4)
-│   │   └── nrf24_test.rs    # NRF24L01 SPI communication and register verification test
+│   │   ├── nrf24_test.rs    # NRF24L01 SPI communication and register verification test
+│   │   ├── nrf24_tx.rs      # NRF24L01 packet transmitter test (Enhanced ShockBurst TX)
+│   │   └── nrf24_rx.rs      # NRF24L01 packet receiver test (Enhanced ShockBurst RX)
+│   ├── lib.rs           # Library root exporting reusable modules
+│   ├── nrf24.rs         # NRF24L01 driver module (registers, TX/RX configuration, packet handling)
 │   └── main.rs          # Main radiophone firmware application
 ├── Cargo.toml           # Project manifest and dependencies
 └── README.md            # Project documentation
@@ -83,7 +87,7 @@ Connect the Nucleo-L432KC board via USB.
    ```bash
    cargo run --bin blinky
    ```
-   This will flash the microcontroller, start execution, and stream defmt log output to your terminal. The onboard user LED (LD3, connected to `PB3`) will blink at 200 ms intervals.
+   This will flash the microcontroller, start execution, and stream defmt log output to your terminal. The onboard user LED (LD3, connected to `PB3`) will blink at 500 ms intervals.
 
 2. **Run the External LED Demo**:
    Connect an LED with a series resistor (~330 Ω) between `D12` (`PB4`) and GND, then:
@@ -107,7 +111,19 @@ Connect the Nucleo-L432KC board via USB.
    ```
    This binary reads internal registers (`CONFIG`, `STATUS`, `RF_CH`, `TX_ADDR`) and performs a register write/read-back verification to validate SPI communication over RTT defmt logs.
 
-4. **Run the Main Firmware**:
+4. **Run the NRF24L01 Transmitter (TX)**:
+   ```bash
+   cargo run --bin nrf24_tx
+   ```
+   Configures the module on Channel 76 (2476 MHz) with 32-byte payloads and sends periodic ping packets. Supports Auto-Acknowledgment (Enhanced ShockBurst) and logs ACK receipt confirmation over RTT.
+
+5. **Run the NRF24L01 Receiver (RX)**:
+   ```bash
+   cargo run --bin nrf24_rx
+   ```
+   Listens on Channel 76 (2476 MHz) for 32-byte packets, automatically sends hardware ACKs, logs payload text and raw hex bytes over RTT, and pulses the onboard LED on receipt.
+
+6. **Run the Main Firmware**:
    ```bash
    cargo run
    ```
@@ -124,10 +140,10 @@ Connect the Nucleo-L432KC board via USB.
 - [x] Basic onboard LED blinking and defmt logging over RTT
 - [x] External LED output demo (GPIO PB4)
 - [x] NRF24L01 SPI communication test and register verification
+- [x] NRF24L01 packet TX/RX driver and test programs (`nrf24_tx`, `nrf24_rx`)
 - [ ] Push-to-Talk (PTT) button input handling with debouncing
 - [ ] Audio capture (microphone ADC / I2S)
 - [ ] Audio playback (DAC / PWM / I2S audio amplifier)
-- [ ] RF transceiver packet TX/RX driver
 - [ ] Half-duplex transmit and receive state machine
 - [ ] Enclosure and final hardware assembly
 
