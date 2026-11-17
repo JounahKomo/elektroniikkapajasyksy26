@@ -30,8 +30,8 @@ async fn main(_spawner: Spawner) {
     // Onboard LED LD3 (PB3) as heartbeat indicator
     let mut led = Output::new(p.PB3, Level::Low, Speed::Low);
 
-    // CE (PA8, D9) - Chip Enable (active high for RX/TX operations, low for standby/config)
-    let mut ce = Output::new(p.PA8, Level::Low, Speed::Low);
+    // CE (PB0, D3) - Chip Enable (active high for RX/TX operations, low for standby/config)
+    let mut ce = Output::new(p.PB0, Level::Low, Speed::Low);
     ce.set_low();
 
     // CSN (PA11, D10) - Chip Select Not (idle HIGH)

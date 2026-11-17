@@ -101,7 +101,7 @@ Connect the Nucleo-L432KC board via USB.
    - **VCC** -> 3.3V
    - **GND** -> GND
    - **CSN** -> PA11 (D10)
-   - **CE** -> PA8 (D9)
+   - **CE** -> PB0 (D3)
    - **SCK** -> PA5 (A4)
    - **MOSI** -> PA7 (A6)
    - **MISO** -> PA6 (A5)

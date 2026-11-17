@@ -18,8 +18,8 @@ async fn main(_spawner: Spawner) {
     // Status / packet received LED on PB3 (onboard LD3 on Nucleo-32)
     let mut led = Output::new(p.PB3, Level::Low, Speed::Low);
 
-    // CE (PA8, Arduino D9 on Nucleo-32)
-    let ce = Output::new(p.PA8, Level::Low, Speed::Low);
+    // CE (PB0, Arduino D3 on Nucleo-32)
+    let ce = Output::new(p.PB0, Level::Low, Speed::Low);
 
     // CSN (PA11, Arduino D10 on Nucleo-32)
     let csn = Output::new(p.PA11, Level::High, Speed::High);
