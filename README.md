@@ -42,6 +42,12 @@ This project is developed with **Antigravity**, leveraging agentic AI workflows 
 ```
 ├── .cargo/
 │   └── config.toml      # Build target configuration, probe-rs runner, and linker flags
+├── audio/               # Audio assets (8 kHz, 8-bit unsigned PCM) and conversion tool
+│   ├── README.md        # Audio library documentation & selection guide
+│   ├── chime.raw        # Chime sound effect (Wikimedia Commons)
+│   ├── bell.raw         # Bicycle bell ring (Wikimedia Commons)
+│   ├── roger_beep.raw   # Walkie-talkie dual-tone roger beep
+│   └── convert.py       # Helper script to convert standard WAV files to PCM
 ├── src/
 │   ├── bin/
 │   │   ├── blinky.rs        # Hardware bringup demo (blinks onboard LED LD3 on PB3)
@@ -49,7 +55,8 @@ This project is developed with **Antigravity**, leveraging agentic AI workflows 
 │   │   ├── nrf24_test.rs    # NRF24L01 SPI communication and register verification test
 │   │   ├── nrf24_tx.rs      # NRF24L01 packet transmitter test (Enhanced ShockBurst TX)
 │   │   ├── nrf24_rx.rs      # NRF24L01 packet receiver test (Enhanced ShockBurst RX)
-│   │   └── speakers.rs      # Grove Speaker v1.1 PWM beep test (TIM1_CH1 on PA8)
+│   │   ├── speakers.rs      # Grove Speaker v1.1 PWM beep test (TIM1_CH1 on PA8)
+│   │   └── audio_player.rs  # Audio file player via high-frequency PWM on Grove Speaker
 │   ├── lib.rs           # Library root exporting reusable modules
 │   ├── nrf24.rs         # NRF24L01 driver module (registers, TX/RX configuration, packet handling)
 │   └── main.rs          # Main radiophone firmware application
@@ -139,7 +146,13 @@ Connect the Nucleo-L432KC board via USB.
    ```
    Generates a 1000 Hz square wave beep tone (300 ms on, 1000 ms off) via hardware timer PWM, with the onboard LED LD3 flashing in sync.
 
-7. **Run the Main Firmware**:
+7. **Run the Audio File Player**:
+   ```bash
+   cargo run --bin audio_player
+   ```
+   Plays real 8 kHz 8-bit PCM audio clips over the Grove Speaker using 64 kHz carrier PWM on `PA8`. You can select which track to play (e.g. `chime`, `bell`, or `roger_beep`) or enable cycling through all tracks in [`src/bin/audio_player.rs`](file:///home/joona/elepaja/src/bin/audio_player.rs). See [`audio/README.md`](file:///home/joona/elepaja/audio/README.md) for details on adding custom audio files.
+
+8. **Run the Main Firmware**:
    ```bash
    cargo run
    ```
@@ -157,7 +170,7 @@ Connect the Nucleo-L432KC board via USB.
 - [x] External LED output demo (GPIO PB4)
 - [x] NRF24L01 SPI communication test and register verification
 - [x] NRF24L01 packet TX/RX driver and test programs (`nrf24_tx`, `nrf24_rx`)
-- [x] Audio playback test (PWM tone generator on PA8 / TIM1_CH1 with Grove Speaker v1.1)
+- [x] Audio playback test (PWM tone generator & audio waveform player on PA8 / TIM1_CH1)
 - [ ] Push-to-Talk (PTT) button input handling with debouncing
 - [ ] Audio capture (microphone ADC / I2S)
 - [ ] Half-duplex transmit and receive state machine
