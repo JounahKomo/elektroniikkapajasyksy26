@@ -25,6 +25,12 @@ defmt = "0.3"
 defmt-rtt = "0.4"
 panic-probe = { version = "0.3", features = ["print-defmt"] }
 
+# The bit-banged I2S audio driver needs optimised code to meet its ~78 cycle/bit timing.
+# An opt-level 0 build is far too slow and produces broken clocks (noise on the amplifier).
+[profile.dev]
+opt-level = 3
+debug = 2
+
 [profile.release]
 debug = 2
 opt-level = "s"

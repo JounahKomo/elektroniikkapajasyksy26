@@ -15,9 +15,10 @@ The objective of this project is to design and build a functional radiophone. Th
 - **Microcontroller**: STMicroelectronics STM32L432KC (ARM Cortex-M4 with FPU)
 - **Development Board**: [NUCLEO-L432KC](https://www.st.com/en/evaluation-tools/nucleo-l432kc.html) (Nucleo-32 form factor)
 - **Peripherals & RF Modules**:
-  - NRF24L01 2.4 GHz RF transceiver module
-  - Grove Speaker v1.1 active speaker module (LM386 amplifier)
-  - Microphones, audio amplifiers, and PTT controls (integrated as development progresses)
+  - NRF24L01 2.4 GHz RF transceiver module (SPI1)
+  - MAX98357A I2S Class-D mono audio amplifier with passive speaker
+  - INMP441 I2S digital MEMS microphone
+  - PTT controls and power management
 
 ### Software Stack & Tools
 
@@ -31,9 +32,41 @@ The objective of this project is to design and build a functional radiophone. Th
 
 ---
 
-## Development Workflow
+## Pinout and Wiring Reference
 
-This project is developed with **Antigravity**, leveraging agentic AI workflows to assist with embedded bringup, peripheral configuration, and code iteration alongside hands-on bare-metal Rust development.
+### 1. NRF24L01 (2.4 GHz RF Transceiver – SPI1)
+| NRF24L01 Pin | Nucleo-L432KC Pin | Description / Function |
+| :--- | :--- | :--- |
+| **VCC** | **3.3V** | Power supply (3.3V only! Do not connect to 5V) |
+| **GND** | **GND** | Ground |
+| **SCK** | **PA5** | SPI1 SCK (D13) |
+| **MISO** | **PA6** | SPI1 MISO (D12) |
+| **MOSI** | **PA7** | SPI1 MOSI (D11) |
+| **CSN** | **PA11** | SPI Chip Select (D10) |
+| **CE** | **PB0** | Chip Enable (D9) |
+
+### 2. INMP441 (I2S MEMS Microphone)
+| INMP441 Pin | Nucleo-L432KC Pin / Connection | Description / Function |
+| :--- | :--- | :--- |
+| **VDD** | **3.3V** | Power supply (3.3V) |
+| **GND** | **GND** | Ground |
+| **L/R** | **GND** | Selects Left Channel audio |
+| **SCK** | **PA3** (A2) | I2S Bit Clock (connected in parallel with MAX98357A BCLK) |
+| **WS** | **PA4** (A3) | I2S Word Select / LRC (connected in parallel with MAX98357A LRC) |
+| **SD** | **PA1** (A1) | I2S Digital Audio Serial Data In to STM32 |
+
+### 3. MAX98357A (I2S Class-D Amplifier) & Passive Speaker
+| MAX98357A Pin | Nucleo-L432KC Pin / Connection | Description / Function |
+| :--- | :--- | :--- |
+| **VIN** | **5V** (or 3.3V) | Supply voltage (5V delivers higher output power) |
+| **GND** | **GND** | Ground |
+| **BCLK** | **PA3** (A2) | I2S Bit Clock (connected in parallel with INMP441 SCK) |
+| **LRC** | **PA4** (A3) | I2S Word Select / Left-Right Clock (connected in parallel with INMP441 WS) |
+| **DIN** | **PA10** (D0 / RX) | I2S Digital Audio Data Input to Amplifier |
+| **SD_MODE** | **3.3V** (or unconnected) | Active mode (unconnected defaults to mono mix on breakout boards) |
+| **GAIN** | *Leave unconnected* | Floating selects 9 dB standard gain |
+| **"+"** | Speaker terminal 1 | Bridge-Tied Load (BTL) speaker output |
+| **"-"** | Speaker terminal 2 | Bridge-Tied Load (BTL) speaker output |
 
 ---
 
@@ -44,6 +77,7 @@ This project is developed with **Antigravity**, leveraging agentic AI workflows 
 │   └── config.toml      # Build target configuration, probe-rs runner, and linker flags
 ├── audio/               # Audio assets (8 kHz, 8-bit unsigned PCM) and conversion tool
 │   ├── README.md        # Audio library documentation & selection guide
+│   ├── audio_testi.raw  # User test speech audio file
 │   ├── chime.raw        # Chime sound effect (Wikimedia Commons)
 │   ├── bell.raw         # Bicycle bell ring (Wikimedia Commons)
 │   ├── roger_beep.raw   # Walkie-talkie dual-tone roger beep
@@ -55,9 +89,11 @@ This project is developed with **Antigravity**, leveraging agentic AI workflows 
 │   │   ├── nrf24_test.rs    # NRF24L01 SPI communication and register verification test
 │   │   ├── nrf24_tx.rs      # NRF24L01 packet transmitter test (Enhanced ShockBurst TX)
 │   │   ├── nrf24_rx.rs      # NRF24L01 packet receiver test (Enhanced ShockBurst RX)
-│   │   ├── speakers.rs      # Grove Speaker v1.1 PWM beep test (TIM1_CH1 on PA8)
-│   │   └── audio_player.rs  # Audio file player via high-frequency PWM on Grove Speaker
+│   │   ├── speakers.rs      # MAX98357A I2S beep test (1 kHz sine tone on PA3/PA4/PA10)
+│   │   ├── audio_player.rs  # MAX98357A I2S audio file player (PA3/PA4/PA10)
+│   │   └── mic_test.rs      # Microphone listen & speaker playback loop test (INMP441 + MAX98357A)
 │   ├── lib.rs           # Library root exporting reusable modules
+│   ├── max98357a.rs     # MAX98357A & INMP441 I2S audio driver (cycle-accurate DWT timing)
 │   ├── nrf24.rs         # NRF24L01 driver module (registers, TX/RX configuration, packet handling)
 │   └── main.rs          # Main radiophone firmware application
 ├── Cargo.toml           # Project manifest and dependencies
@@ -108,15 +144,6 @@ Connect the Nucleo-L432KC board via USB.
    This will flash and blink the external LED at 500 ms intervals.
 
 3. **Run the NRF24L01 SPI Test**:
-   Wiring connections:
-   - **VCC** -> 3.3V
-   - **GND** -> GND
-   - **CSN** -> PA11 (D10)
-   - **CE** -> PB0 (D3)
-   - **SCK** -> PA5 (A4)
-   - **MOSI** -> PA7 (A6)
-   - **MISO** -> PA6 (A5)
-
    ```bash
    cargo run --bin nrf24_test
    ```
@@ -134,25 +161,25 @@ Connect the Nucleo-L432KC board via USB.
    ```
    Listens on Channel 76 (2476 MHz) for 32-byte packets, automatically sends hardware ACKs, logs payload text and raw hex bytes over RTT, and pulses the onboard LED on receipt.
 
-6. **Run the Grove Speaker Beep Test**:
-   Wiring connections for Grove Speaker v1.1:
-   - **VCC (Red)** -> +5V (Nucleo 5V supply, 4.0V–5.5V operating range)
-   - **GND (Black)** -> GND
-   - **NC** -> Not Connected
-   - **SIG (White/Yellow)** -> PA8 (D9, TIM1_CH1 PWM output)
-
+6. **Run the MAX98357A I2S Speaker Beep Test**:
    ```bash
    cargo run --bin speakers
    ```
-   Generates a 1000 Hz square wave beep tone (300 ms on, 1000 ms off) via hardware timer PWM, with the onboard LED LD3 flashing in sync.
+   Streams a pure 1000 Hz sine wave tone over I2S to the MAX98357A amplifier, with the onboard LED LD3 flashing in sync.
 
-7. **Run the Audio File Player**:
+7. **Run the MAX98357A I2S Audio File Player**:
    ```bash
    cargo run --bin audio_player
    ```
-   Plays real 8 kHz 8-bit PCM audio clips over the Grove Speaker using 64 kHz carrier PWM on `PA8`. You can select which track to play (e.g. `chime`, `bell`, or `roger_beep`) or enable cycling through all tracks in [`src/bin/audio_player.rs`](file:///home/joona/elepaja/src/bin/audio_player.rs). See [`audio/README.md`](file:///home/joona/elepaja/audio/README.md) for details on adding custom audio files.
+   Plays real 8 kHz 8-bit PCM audio clips over I2S to the MAX98357A amplifier. By default, it plays `audio_testi.raw`. You can select which track to play (e.g. `audio_testi`, `chime`, `bell`, or `roger_beep`) or enable cycling through all tracks in [`src/bin/audio_player.rs`](file:///home/joona/elepaja/src/bin/audio_player.rs). See [`audio/README.md`](file:///home/joona/elepaja/audio/README.md) for details on adding custom audio files.
 
-8. **Run the Main Firmware**:
+8. **Run the Microphone Listen & Speaker Echo Test**:
+   ```bash
+   cargo run --bin mic_test
+   ```
+   Listens to the INMP441 MEMS microphone for 2.0 seconds (16-bit PCM @ 8,000 Hz), removes DC bias, measures voice levels, and immediately plays the captured voice back through the MAX98357A amplifier and speaker in a continuous echo loop.
+
+9. **Run the Main Firmware**:
    ```bash
    cargo run
    ```
@@ -170,9 +197,9 @@ Connect the Nucleo-L432KC board via USB.
 - [x] External LED output demo (GPIO PB4)
 - [x] NRF24L01 SPI communication test and register verification
 - [x] NRF24L01 packet TX/RX driver and test programs (`nrf24_tx`, `nrf24_rx`)
-- [x] Audio playback test (PWM tone generator & audio waveform player on PA8 / TIM1_CH1)
+- [x] MAX98357A I2S amplifier audio output driver (`speakers` beep test & `audio_player`)
+- [x] INMP441 I2S MEMS microphone capture and echo test (`mic_test`)
 - [ ] Push-to-Talk (PTT) button input handling with debouncing
-- [ ] Audio capture (microphone ADC / I2S)
 - [ ] Half-duplex transmit and receive state machine
 - [ ] Enclosure and final hardware assembly
 

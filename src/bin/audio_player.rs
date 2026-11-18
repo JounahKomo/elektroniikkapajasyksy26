@@ -3,12 +3,9 @@
 
 use defmt::info;
 use embassy_executor::Spawner;
-use embassy_stm32::gpio::{Level, Output, OutputType, Speed};
-use embassy_stm32::rcc::*;
-use embassy_stm32::time::Hertz;
-use embassy_stm32::timer::low_level::CountingMode;
-use embassy_stm32::timer::simple_pwm::{PwmPin, SimplePwm};
+use embassy_stm32::gpio::{Level, Output, Speed};
 use embassy_time::{Duration, Timer};
+use nucleo_l432kc_app::max98357a::{config_80mhz, Max98357a};
 use {defmt_rtt as _, panic_probe as _};
 
 /// Audio track definition
@@ -54,63 +51,33 @@ pub const ALL_TRACKS: &[Track] = &[TRACK_AUDIO_TESTI, TRACK_CHIME, TRACK_BELL, T
 const SELECTED_TRACK: Track = TRACK_AUDIO_TESTI;
 const PLAY_ALL_TRACKS: bool = false;
 
-// 80 MHz system clock
-const SYSCLK_HZ: u32 = 80_000_000;
-
-// Carrier PWM frequency: 100 kHz is ultrasonic (completely inaudible to eliminate buzzing)
-const PWM_CARRIER_HZ: u32 = 100_000;
-
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     // Configure system clock to 80 MHz via PLL from 4 MHz MSI
-    let mut config = embassy_stm32::Config::default();
-    config.rcc.pll = Some(Pll {
-        source: PllSource::MSI,
-        prediv: PllPreDiv::DIV1,
-        mul: PllMul::MUL40, // 4 MHz * 40 = 160 MHz VCO
-        divp: None,
-        divq: None,
-        divr: Some(PllRDiv::DIV2), // 160 MHz / 2 = 80 MHz SYSCLK
-    });
-    config.rcc.sys = Sysclk::PLL1_R;
-    config.rcc.ahb_pre = AHBPrescaler::DIV1;
-    config.rcc.apb1_pre = APBPrescaler::DIV1;
-    config.rcc.apb2_pre = APBPrescaler::DIV1;
-
-    let p = embassy_stm32::init(config);
+    let p = embassy_stm32::init(config_80mhz());
 
     // Onboard green LED LD3 (PB3) as playback indicator
     let mut led = Output::new(p.PB3, Level::Low, Speed::Low);
 
     Timer::after(Duration::from_millis(500)).await;
     info!("===============================================");
-    info!("=== Grove Speaker v1.1 Audio Player (80MHz) ===");
+    info!("=== MAX98357A I2S Audio Player (80 MHz SYSCLK) ===");
     info!("===============================================");
-    info!("Output pin: PA8 (TIM1_CH1, Nucleo D9, PWM audio)");
-    info!("Carrier frequency: {} Hz (ultrasonic)", PWM_CARRIER_HZ);
+    info!("I2S Pinout:");
+    info!("  BCLK    -> PA3  (I2S Bit Clock / SCK, Nucleo A3)");
+    info!("  LRC/WS  -> PA4  (I2S Left-Right Clock / WS, Nucleo A4)");
+    info!("  DIN     -> PA10 (I2S Data Out from STM32, Nucleo D2)");
+    info!("Power & Config:");
+    info!("  VIN     -> 5V   (Nucleo 5V, or 3.3V)");
+    info!("  GND     -> GND");
+    info!("  SD_MODE -> 3.3V (Active, mono L+R summing)");
+    info!("  GAIN    -> Leave unconnected (9 dB standard gain)");
+    info!("Passive Speaker:");
+    info!("  MAX98357A '+' -> Speaker terminal 1");
+    info!("  MAX98357A '-' -> Speaker terminal 2");
 
-    // Configure PA8 as TIM1 CH1 PWM output
-    let ch1 = PwmPin::new_ch1(p.PA8, OutputType::PushPull);
-    let mut pwm = SimplePwm::new(
-        p.TIM1,
-        Some(ch1),
-        None,
-        None,
-        None,
-        Hertz(PWM_CARRIER_HZ),
-        CountingMode::EdgeAlignedUp,
-    );
-
-    let mut pwm_ch1 = pwm.ch1();
-    pwm_ch1.enable();
-    pwm_ch1.set_duty_cycle(0);
-
-    let max_duty = pwm_ch1.max_duty_cycle() as u32;
-    info!("PWM max duty value: {}", max_duty);
-
-    // Calculate CPU cycles per audio sample (cortex_m::asm::delay takes 3 cycles per unit)
-    // For 8000 Hz sample rate at 80 MHz: 80,000,000 / 8,000 = 10,000 cycles (~3320 delay units after loop overhead)
-    let delay_units_8k = ((SYSCLK_HZ / 8000) - 40) / 3;
+    // Initialize MAX98357A I2S driver
+    let mut amp = Max98357a::new(p.PA3, p.PA4, p.PA10);
 
     let mut track_idx: usize = 0;
 
@@ -134,22 +101,13 @@ async fn main(_spawner: Spawner) {
 
         led.set_high();
 
-        // Sample-accurate playback loop with zero jitter
-        for &sample in current_track.data.iter() {
-            // Scale 8-bit unsigned PCM sample (0..255) to PWM duty cycle
-            let duty = ((sample as u32) * max_duty) / 255;
-            pwm_ch1.set_duty_cycle(duty as u16);
+        // Stream audio to MAX98357A I2S amplifier
+        amp.play_pcm_u8(current_track.data, current_track.sample_rate);
 
-            // Precise delay for exact 8,000 Hz sample timing
-            cortex_m::asm::delay(delay_units_8k);
-        }
-
-        // Silence speaker after playback
-        pwm_ch1.set_duty_cycle(0);
         led.set_low();
         info!("Finished playback of \"{}\"", current_track.name);
 
-        // Pause before repeating or advancing to next track
-        Timer::after(Duration::from_millis(1500)).await;
+        // Pause 2 seconds between replays
+        Timer::after(Duration::from_millis(2000)).await;
     }
 }
