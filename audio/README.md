@@ -12,21 +12,20 @@ This directory contains raw audio files formatted for playback on the STM32 micr
 
 | File | Duration | Size | Source / Description |
 | :--- | :--- | :--- | :--- |
+| `audio_testi.raw` | 2.51 s | 20,042 B | User test audio clip (`audio_testi.wav`) |
 | `chime.raw` | 2.26 s | 18,041 B | Melodious chime ([Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Chime.wav), CC BY-SA) |
 | `bell.raw` | 1.80 s | 14,400 B | Bicycle bell ring ([Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Bike-bell.wav), CC0) |
 | `roger_beep.raw` | 0.28 s | 2,240 B | Dual-tone walkie-talkie roger beep (1000 Hz + 1500 Hz) |
 
 ## How to Select an Audio File
-In `src/bin/audio_player.rs`, configure the `AUDIO_TRACK` constant:
+In `src/bin/audio_player.rs`, configure the `SELECTED_TRACK` constant:
 ```rust
 // Select which audio track to play:
-const SELECTED_TRACK: AudioTrack = AudioTrack {
-    name: "Chime",
-    data: include_bytes!("../../audio/chime.raw"),
-};
+const SELECTED_TRACK: Track = TRACK_AUDIO_TESTI;
 // Or select:
-// const SELECTED_TRACK: AudioTrack = AudioTrack { name: "Bicycle Bell", data: include_bytes!("../../audio/bell.raw") };
-// const SELECTED_TRACK: AudioTrack = AudioTrack { name: "Roger Beep", data: include_bytes!("../../audio/roger_beep.raw") };
+// const SELECTED_TRACK: Track = TRACK_CHIME;
+// const SELECTED_TRACK: Track = TRACK_BELL;
+// const SELECTED_TRACK: Track = TRACK_ROGER_BEEP;
 ```
 
 ## Adding New Audio Files
