@@ -8,10 +8,10 @@ use nucleo_l432kc_app::max98357a::{config_80mhz, Max98357a};
 use {defmt_rtt as _, panic_probe as _};
 
 /// Digital amplification factor for live monitoring.
-/// 1 = Unity gain (natural level)
-/// 2 = Moderate boost (recommended for typical distance)
-/// 4 = High boost (for whispering or distance > 30 cm)
-const GAIN: i32 = 2;
+/// INMP441 sensitivity is -26 dBFS at 94 dB SPL.
+/// Normal speech at 20 cm produces ~30..150 peak in top 16 bits.
+/// 16x boost scales normal speech to ~500..3,000 peak (clean, clear speaker output).
+const GAIN: i32 = 16;
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
@@ -41,13 +41,34 @@ async fn main(_spawner: Spawner) {
     // Initialize audio driver with speaker output (PA10) and microphone input (PA1)
     let mut audio = Max98357a::new_with_mic(p.PA4, p.PA5, p.PA10, p.PA1);
 
-    // Warm-up check: confirm the timing runs with 0 late bits
+    // Startup beep: confirm the amplifier is active and speaker produces sound
+    info!("Testing speaker with 150 ms tone...");
     audio.play_tone(1000, 150);
-    info!("Audio driver initialized. Late bits: {}", audio.late_bits());
+    info!("Speaker test complete. Late bits: {}", audio.late_bits());
 
     // Keep clocks running for 350 ms so the INMP441 finishes its 2^18-cycle startup filter
-    info!("Warming up microphone filter (350 ms continuous clocks)...");
-    audio.idle_clocks(350);
+    // and automatically detect whether L/R is tied to GND (Left) or VDD (Right).
+    info!("Warming up microphone filter and detecting active channel (350 ms)...");
+    let mut left_warmup = 0u32;
+    let mut right_warmup = 0u32;
+    let warmup_frames = (16_000 * 350) / 1000;
+    for _ in 0..warmup_frames {
+        let (rx_l, rx_r) = audio.exchange_frame(0, 0);
+        if rx_l != 0 {
+            left_warmup += 1;
+        }
+        if rx_r != 0 {
+            right_warmup += 1;
+        }
+    }
+
+    let use_right = right_warmup > left_warmup;
+    info!(
+        "Microphone ready! Selected channel: {} (activity: Left={}, Right={})",
+        if use_right { "Right" } else { "Left" },
+        left_warmup,
+        right_warmup
+    );
 
     info!(">>> LIVE AUDIO FEED ACTIVE: Speak into microphone! <<<");
     led.set_high();
@@ -61,9 +82,8 @@ async fn main(_spawner: Spawner) {
 
     // Diagnostic tracking (updated once every 16,000 frames = 1.0 second)
     let mut frame_count: u32 = 0;
+    let mut max_raw: i16 = 0;
     let mut max_abs: i16 = 0;
-    let mut left_active: u32 = 0;
-    let mut right_active: u32 = 0;
 
     loop {
         // Exchange one 64-BCLK frame:
@@ -71,15 +91,13 @@ async fn main(_spawner: Spawner) {
         // Receive microphone sample from INMP441 on SD (PA1)
         let (rx_l, rx_r) = audio.exchange_frame(current_tx_sample, current_tx_sample);
 
-        if rx_l != 0 {
-            left_active += 1;
-        }
-        if rx_r != 0 {
-            right_active += 1;
-        }
+        // Read consistently from the selected channel
+        let raw_in = if use_right { rx_r } else { rx_l };
 
-        // Take whichever channel has active data (supports L/R tied to GND or VDD)
-        let raw_in = if rx_l != 0 { rx_l } else { rx_r };
+        let abs_raw = raw_in.saturating_abs();
+        if abs_raw > max_raw {
+            max_raw = abs_raw;
+        }
 
         // 1-pole high-pass DC-blocking filter (cutoff ~25 Hz at 16 kHz sample rate)
         let x = raw_in as i32;
@@ -93,7 +111,7 @@ async fn main(_spawner: Spawner) {
         // Prepare sample to be transmitted to the speaker in the very next frame (62.5 µs latency)
         current_tx_sample = amplified as u16;
 
-        // Track peak amplitude
+        // Track peak amplitude of amplified signal
         let abs_val = amplified.saturating_abs();
         if abs_val > max_abs {
             max_abs = abs_val;
@@ -101,24 +119,18 @@ async fn main(_spawner: Spawner) {
 
         frame_count += 1;
         if frame_count >= 16_000 {
-            let active_channel = if left_active >= right_active {
-                "Left"
-            } else {
-                "Right"
-            };
             info!(
-                "Live feed: Peak = {} / 32767 ({}%), Active channel = {}, Late bits = {}",
+                "Live feed: Raw peak = {} / 32767, Out peak = {} ({}%), Late bits = {}",
+                max_raw,
                 max_abs,
                 (max_abs as u32 * 100) / 32767,
-                active_channel,
                 audio.late_bits()
             );
 
             // Reset diagnostics for next 1-second window
             frame_count = 0;
+            max_raw = 0;
             max_abs = 0;
-            left_active = 0;
-            right_active = 0;
         }
     }
 }

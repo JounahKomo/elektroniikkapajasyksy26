@@ -172,7 +172,15 @@ impl Max98357a {
         let right_slot = (right as u32) << 15;
         let frame: u64 = ((left_slot as u64) << 32) | right_slot as u64;
 
-        let start = self.next_frame;
+        let now = DWT::cycle_count();
+        // If we fell behind by more than half a bit cycle (e.g. due to logging or startup delay),
+        // resynchronize to start cleanly now so we never burst out BCLK pulses at CPU speed.
+        let start = if (now.wrapping_sub(self.next_frame) as i32) > (HALF_CYCLES as i32) {
+            now.wrapping_add(100)
+        } else {
+            self.next_frame
+        };
+
         let mut late = 0u32;
         let mut rx_left: u16 = 0;
         let mut rx_right: u16 = 0;
