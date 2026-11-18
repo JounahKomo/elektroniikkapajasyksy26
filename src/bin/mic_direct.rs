@@ -10,8 +10,8 @@ use {defmt_rtt as _, panic_probe as _};
 /// Digital amplification factor for live monitoring.
 /// INMP441 sensitivity is -26 dBFS at 94 dB SPL.
 /// Normal speech at 20 cm produces ~30..150 peak in top 16 bits.
-/// 16x boost scales normal speech to ~500..3,000 peak (clean, clear speaker output).
-const GAIN: i32 = 16;
+/// 8x boost scales normal speech to ~250..1,500 peak; loud sounds clip at 100%.
+const GAIN: i32 = 8;
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
@@ -74,48 +74,35 @@ async fn main(_spawner: Spawner) {
     led.set_high();
 
     // DC-blocking high-pass filter state:
-    // y[n] = x[n] - x[n-1] + 0.99 * y[n-1]
+    // y[n] = x[n] - x[n-1] + 253/256 * y[n-1]
     let mut prev_x: i32 = 0;
     let mut prev_y: i32 = 0;
 
     let mut current_tx_sample: u16 = 0;
 
-    // Diagnostic tracking (updated once every 16,000 frames = 1.0 second)
+    // Diagnostic tracking (logged once every 16,000 frames = 1.0 second)
     let mut frame_count: u32 = 0;
     let mut max_raw: i16 = 0;
     let mut max_abs: i16 = 0;
 
     loop {
-        // Exchange one 64-BCLK frame:
-        // Transmit current_tx_sample to MAX98357A on DIN (PA10)
-        // Receive microphone sample from INMP441 on SD (PA1)
-        let (rx_l, rx_r) = audio.exchange_frame(current_tx_sample, current_tx_sample);
-
-        // Read consistently from the selected channel
-        let raw_in = if use_right { rx_r } else { rx_l };
-
-        let abs_raw = raw_in.saturating_abs();
-        if abs_raw > max_raw {
-            max_raw = abs_raw;
-        }
-
-        // 1-pole high-pass DC-blocking filter (cutoff ~25 Hz at 16 kHz sample rate)
-        let x = raw_in as i32;
-        let y = x - prev_x + ((prev_y * 253) >> 8);
-        prev_x = x;
-        prev_y = y;
-
-        // Apply gain with saturation
-        let amplified = (y * GAIN).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-
-        // Prepare sample to be transmitted to the speaker in the very next frame (62.5 µs latency)
-        current_tx_sample = amplified as u16;
-
-        // Track peak amplitude of amplified signal
-        let abs_val = amplified.saturating_abs();
-        if abs_val > max_abs {
-            max_abs = abs_val;
-        }
+        // One 64-BCLK frame. The filter runs INSIDE the frame (in the idle time of one bit),
+        // so the I2S clocks keep a perfectly regular 16 kHz rhythm. The returned sample is
+        // sent to the speaker in the next frame (62.5 us latency).
+        current_tx_sample = audio.exchange_frame_dsp(current_tx_sample, use_right, |raw| {
+            if raw.unsigned_abs() as i16 > max_raw {
+                max_raw = raw.unsigned_abs() as i16;
+            }
+            let x = raw as i32;
+            let y = x - prev_x + ((prev_y * 253) >> 8);
+            prev_x = x;
+            prev_y = y;
+            let out = (y * GAIN).clamp(-32767, 32767) as i16;
+            if out.unsigned_abs() as i16 > max_abs {
+                max_abs = out.unsigned_abs() as i16;
+            }
+            out as u16
+        });
 
         frame_count += 1;
         if frame_count >= 16_000 {
@@ -126,8 +113,6 @@ async fn main(_spawner: Spawner) {
                 (max_abs as u32 * 100) / 32767,
                 audio.late_bits()
             );
-
-            // Reset diagnostics for next 1-second window
             frame_count = 0;
             max_raw = 0;
             max_abs = 0;

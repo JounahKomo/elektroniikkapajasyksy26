@@ -162,21 +162,50 @@ impl Max98357a {
     /// Transmit one 64-BCLK I2S frame with TX samples, while simultaneously reading
     /// the 16-bit audio sample from the INMP441 microphone on PA1.
     /// Returns `(left_sample, right_sample)`.
+    #[inline(always)]
+    pub fn exchange_frame(&mut self, left: u16, right: u16) -> (i16, i16) {
+        self.frame_core(left, right, false, None::<fn(i16) -> u16>).0
+    }
+
+    /// Transmit one frame (`tx` on both slots) and run `f` on the freshly received
+    /// microphone sample *inside the frame*, while the clocks keep running at a constant rate.
+    /// `f` must be short (about 30 cycles). Its return value is the TX sample for the next frame,
+    /// which is returned. Use `use_right = true` when the INMP441 L/R pin is tied to VDD.
+    #[inline(always)]
+    pub fn exchange_frame_dsp<F: FnOnce(i16) -> u16>(
+        &mut self,
+        tx: u16,
+        use_right: bool,
+        f: F,
+    ) -> u16 {
+        self.frame_core(tx, tx, use_right, Some(f)).1
+    }
+
+    /// Core bit-banged I2S frame (64 BCLK).
     ///
     /// Philips I2S: WS changes on a BCLK falling edge, the MSB follows one BCLK later.
     /// Each 32-bit slot = [delay bit][16 data bits MSB first][15 zero bits].
+    /// The optional callback runs right after the mic sample has been fully received
+    /// (bit 17 for the left slot, bit 49 for the right slot), in the idle time of a half bit.
     #[inline(always)]
-    pub fn exchange_frame(&mut self, left: u16, right: u16) -> (i16, i16) {
+    fn frame_core<F: FnOnce(i16) -> u16>(
+        &mut self,
+        left: u16,
+        right: u16,
+        mic_right: bool,
+        mut cb: Option<F>,
+    ) -> ((i16, i16), u16) {
         // Slot layout (bit 31 is transmitted first): 0, d15..d0, 0 x15
         let left_slot = (left as u32) << 15;
         let right_slot = (right as u32) << 15;
         let frame: u64 = ((left_slot as u64) << 32) | right_slot as u64;
+        let cb_index: u32 = if mic_right { 49 } else { 17 };
 
         let now = DWT::cycle_count();
-        // If we fell behind by more than half a bit cycle (e.g. due to logging or startup delay),
-        // resynchronize to start cleanly now so we never burst out BCLK pulses at CPU speed.
-        let start = if (now.wrapping_sub(self.next_frame) as i32) > (HALF_CYCLES as i32) {
-            now.wrapping_add(100)
+        // Only if we are clearly behind (e.g. after a log line) restart the frame now, so we
+        // never burst BCLK pulses at CPU speed. Normal per-frame overhead stays below this.
+        let start = if (now.wrapping_sub(self.next_frame) as i32) > (BIT_CYCLES as i32) {
+            now
         } else {
             self.next_frame
         };
@@ -184,6 +213,7 @@ impl Max98357a {
         let mut late = 0u32;
         let mut rx_left: u16 = 0;
         let mut rx_right: u16 = 0;
+        let mut next_tx: u16 = 0;
 
         let mut i = 0u32;
         while i < 64 {
@@ -225,13 +255,21 @@ impl Max98357a {
                 rx_right = (rx_right << 1) | (in_bit as u16);
             }
 
+            // Sample complete: run the user callback in the idle time before the next edge
+            if i == cb_index {
+                if let Some(f) = cb.take() {
+                    let sample = if mic_right { rx_right } else { rx_left } as i16;
+                    next_tx = f(sample);
+                }
+            }
+
             i += 1;
         }
 
         self.late_bits = self.late_bits.wrapping_add(late);
         self.next_frame = start.wrapping_add(FRAME_CYCLES);
 
-        (rx_left as i16, rx_right as i16)
+        ((rx_left as i16, rx_right as i16), next_tx)
     }
 
     /// Transmit one 64-BCLK I2S frame with the given 16-bit signed samples (as u16 bit patterns).
