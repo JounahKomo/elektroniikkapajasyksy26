@@ -44,15 +44,15 @@ async fn main(_spawner: Spawner) {
     info!("  VDD     -> 3.3V (Nucleo 3V3)");
     info!("  GND     -> GND");
     info!("  L/R     -> GND (Left channel) or 3.3V (Right channel)");
-    info!("  SCK     -> PA3 [Nucleo A2, CN4 pin 10] (shared with MAX98357A BCLK)");
-    info!("  WS      -> PA4 [Nucleo A3, CN4 pin 9]  (shared with MAX98357A LRC)");
+    info!("  SCK     -> PA4 [Nucleo A3, CN4 pin 9] (shared with MAX98357A BCLK)");
+    info!("  WS      -> PA5 [Nucleo A4, CN4 pin 8]  (shared with MAX98357A LRC)");
     info!("  SD      -> PA1 [Nucleo A1, CN4 pin 11] (digital audio input to STM32)");
     info!("");
     info!("--- MAX98357A I2S Amplifier Pinout ---");
     info!("  VIN     -> 5V (or 3.3V)");
     info!("  GND     -> GND");
-    info!("  BCLK    -> PA3 [Nucleo A2] (shared with INMP441 SCK)");
-    info!("  LRC     -> PA4 [Nucleo A3] (shared with INMP441 WS)");
+    info!("  BCLK    -> PA4 [Nucleo A3] (shared with INMP441 SCK)");
+    info!("  LRC     -> PA5 [Nucleo A4] (shared with INMP441 WS)");
     info!("  DIN     -> PA10 [Nucleo D0 / RX, CN3 pin 2]");
     info!("  SD_MODE -> Leave unconnected or tie to 3.3V");
     info!("  GAIN    -> Leave unconnected (9 dB standard gain)");
@@ -60,7 +60,7 @@ async fn main(_spawner: Spawner) {
     info!("=======================================================");
 
     // Initialize audio driver with both speaker output (PA10) and microphone input (PA1)
-    let mut audio = Max98357a::new_with_mic(p.PA3, p.PA4, p.PA10, p.PA1);
+    let mut audio = Max98357a::new_with_mic(p.PA4, p.PA5, p.PA10, p.PA1);
 
     // Warm-up check: confirm the timing runs with 0 late bits
     audio.play_tone(1000, 200);
@@ -141,7 +141,7 @@ async fn main(_spawner: Spawner) {
         );
 
         if max_abs < 100 {
-            info!("WARNING: No audio signal detected on PA1. Check INMP441 wiring (VDD=3.3V, GND, SCK=PA3, WS=PA4, SD=PA1)!");
+            info!("WARNING: No audio signal detected on PA1. Check INMP441 wiring (VDD=3.3V, GND, SCK=PA4, WS=PA5, SD=PA1)!");
         } else {
             info!(
                 "Voice detected! Volume level: {}%",

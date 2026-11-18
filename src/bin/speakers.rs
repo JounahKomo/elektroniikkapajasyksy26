@@ -19,8 +19,8 @@ async fn main(_spawner: Spawner) {
     info!("=== MAX98357A Continuous I2S Tone Test (1 kHz)      ===");
     info!("=======================================================");
     info!("I2S Pinout (STM32L432KC Nucleo-32):");
-    info!("  BCLK    -> PA3  [Arduino header pin A2, CN4 pin 10]");
-    info!("  LRC/WS  -> PA4  [Arduino header pin A3, CN4 pin 9]");
+    info!("  BCLK    -> PA4  [Arduino header pin A3, CN4 pin 9]");
+    info!("  LRC/WS  -> PA5  [Arduino header pin A4, CN4 pin 8]");
     info!("  DIN     -> PA10 [Arduino header pin D0 / RX, CN3 pin 2]");
     info!("Power & Config:");
     info!("  VIN     -> 5V   (or 3.3V)");
@@ -29,7 +29,7 @@ async fn main(_spawner: Spawner) {
     info!("  GAIN    -> Unconnected (9 dB)");
     info!("Passive Speaker: MAX98357A '+' and '-' -> speaker terminals");
 
-    let mut amp = Max98357a::new(p.PA3, p.PA4, p.PA10);
+    let mut amp = Max98357a::new(p.PA4, p.PA5, p.PA10);
 
     // Timing self-check: play 500 ms and report how many bits were clocked out late.
     amp.play_tone(1000, 500);

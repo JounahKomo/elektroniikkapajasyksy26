@@ -50,9 +50,9 @@ The objective of this project is to design and build a functional radiophone. Th
 | :--- | :--- | :--- |
 | **VDD** | **3.3V** | Power supply (3.3V) |
 | **GND** | **GND** | Ground |
-| **L/R** | **GND** | Selects Left Channel audio |
-| **SCK** | **PA3** (A2) | I2S Bit Clock (connected in parallel with MAX98357A BCLK) |
-| **WS** | **PA4** (A3) | I2S Word Select / LRC (connected in parallel with MAX98357A LRC) |
+| **L/R** | **GND** (or 3.3V) | Selects Left Channel (GND) or Right Channel (3.3V) |
+| **SCK** | **PA4** (A3) | I2S Bit Clock (connected in parallel with MAX98357A BCLK) |
+| **WS** | **PA5** (A4) | I2S Word Select / LRC (connected in parallel with MAX98357A LRC). Shares PA5 with NRF24 SCK, so the NRF24 and audio programs cannot be used together yet |
 | **SD** | **PA1** (A1) | I2S Digital Audio Serial Data In to STM32 |
 
 ### 3. MAX98357A (I2S Class-D Amplifier) & Passive Speaker
@@ -60,8 +60,8 @@ The objective of this project is to design and build a functional radiophone. Th
 | :--- | :--- | :--- |
 | **VIN** | **5V** (or 3.3V) | Supply voltage (5V delivers higher output power) |
 | **GND** | **GND** | Ground |
-| **BCLK** | **PA3** (A2) | I2S Bit Clock (connected in parallel with INMP441 SCK) |
-| **LRC** | **PA4** (A3) | I2S Word Select / Left-Right Clock (connected in parallel with INMP441 WS) |
+| **BCLK** | **PA4** (A3) | I2S Bit Clock (connected in parallel with INMP441 SCK) |
+| **LRC** | **PA5** (A4) | I2S Word Select / Left-Right Clock (connected in parallel with INMP441 WS) |
 | **DIN** | **PA10** (D0 / RX) | I2S Digital Audio Data Input to Amplifier |
 | **SD_MODE** | **3.3V** (or unconnected) | Active mode (unconnected defaults to mono mix on breakout boards) |
 | **GAIN** | *Leave unconnected* | Floating selects 9 dB standard gain |
@@ -89,9 +89,10 @@ The objective of this project is to design and build a functional radiophone. Th
 │   │   ├── nrf24_test.rs    # NRF24L01 SPI communication and register verification test
 │   │   ├── nrf24_tx.rs      # NRF24L01 packet transmitter test (Enhanced ShockBurst TX)
 │   │   ├── nrf24_rx.rs      # NRF24L01 packet receiver test (Enhanced ShockBurst RX)
-│   │   ├── speakers.rs      # MAX98357A I2S beep test (1 kHz sine tone on PA3/PA4/PA10)
-│   │   ├── audio_player.rs  # MAX98357A I2S audio file player (PA3/PA4/PA10)
-│   │   └── mic_test.rs      # Microphone listen & speaker playback loop test (INMP441 + MAX98357A)
+│   │   ├── speakers.rs      # MAX98357A I2S beep test (1 kHz sine tone on PA4/PA5/PA10)
+│   │   ├── audio_player.rs  # MAX98357A I2S audio file player (PA4/PA5/PA10)
+│   │   ├── mic_test.rs      # Microphone listen & speaker playback loop test (INMP441 + MAX98357A)
+│   │   └── mic_direct.rs    # Real-time direct microphone-to-speaker pass-through (~62.5 µs latency)
 │   ├── lib.rs           # Library root exporting reusable modules
 │   ├── max98357a.rs     # MAX98357A & INMP441 I2S audio driver (cycle-accurate DWT timing)
 │   ├── nrf24.rs         # NRF24L01 driver module (registers, TX/RX configuration, packet handling)
@@ -179,14 +180,20 @@ Connect the Nucleo-L432KC board via USB.
    ```
    Listens to the INMP441 MEMS microphone for 2.0 seconds (16-bit PCM @ 8,000 Hz), removes DC bias, measures voice levels, and immediately plays the captured voice back through the MAX98357A amplifier and speaker in a continuous echo loop.
 
-9. **Run the Main Firmware**:
+9. **Run the Direct Live Microphone-to-Speaker Feed**:
    ```bash
-   cargo run
+   cargo run --bin mic_direct
    ```
-   For optimized release builds:
-   ```bash
-   cargo run --release
-   ```
+   Streams live microphone audio directly to the speaker in real-time with near-zero latency (~62.5 µs, 1 audio frame), high-pass DC blocking, and 2x digital amplification.
+
+10. **Run the Main Firmware**:
+    ```bash
+    cargo run
+    ```
+    For optimized release builds:
+    ```bash
+    cargo run --release
+    ```
 
 ---
 
@@ -199,6 +206,7 @@ Connect the Nucleo-L432KC board via USB.
 - [x] NRF24L01 packet TX/RX driver and test programs (`nrf24_tx`, `nrf24_rx`)
 - [x] MAX98357A I2S amplifier audio output driver (`speakers` beep test & `audio_player`)
 - [x] INMP441 I2S MEMS microphone capture and echo test (`mic_test`)
+- [x] Real-time direct microphone-to-speaker live feed (`mic_direct`)
 - [ ] Push-to-Talk (PTT) button input handling with debouncing
 - [ ] Half-duplex transmit and receive state machine
 - [ ] Enclosure and final hardware assembly

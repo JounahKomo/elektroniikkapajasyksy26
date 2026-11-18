@@ -1,8 +1,8 @@
 //! Driver for MAX98357A I2S Class-D Audio Amplifier & INMP441 MEMS Microphone on STM32L432KC.
 //!
 //! Pin assignments:
-//! - BCLK     -> PA3  (I2S Bit Clock, Nucleo pin A2) - shared between MAX98357A BCLK and INMP441 SCK
-//! - LRC / WS -> PA4  (I2S Word Select / Left-Right Clock, Nucleo pin A3) - shared between MAX98357A LRC and INMP441 WS
+//! - BCLK     -> PA4  (I2S Bit Clock, Nucleo pin A3) - shared between MAX98357A BCLK and INMP441 SCK
+//! - LRC / WS -> PA5  (I2S Word Select / Left-Right Clock, Nucleo pin A4) - shared between MAX98357A LRC and INMP441 WS
 //! - DIN      -> PA10 (I2S Digital Audio Data Out from STM32, Nucleo pin D0) -> MAX98357A DIN
 //! - SD       -> PA1  (I2S Digital Audio Data In to STM32, Nucleo pin A1) <- INMP441 SD
 //! - VIN      -> 5V or 3.3V (5V recommended for higher output power)
@@ -21,7 +21,7 @@
 
 use cortex_m::peripheral::DWT;
 use embassy_stm32::gpio::{Input, Level, Output, Pull, Speed};
-use embassy_stm32::peripherals::{PA1, PA10, PA3, PA4};
+use embassy_stm32::peripherals::{PA1, PA10, PA4, PA5};
 use embassy_stm32::rcc::*;
 
 /// GPIOA BSRR (Bit Set / Reset Register): GPIOA base 0x4800_0000 + 0x18
@@ -30,8 +30,8 @@ const GPIOA_BSRR: *mut u32 = 0x4800_0018 as *mut u32;
 /// GPIOA IDR (Input Data Register): GPIOA base 0x4800_0000 + 0x10
 const GPIOA_IDR: *const u32 = 0x4800_0010 as *const u32;
 
-const BCLK_BIT: u32 = 3; // PA3
-const LRC_BIT: u32 = 4; // PA4
+const BCLK_BIT: u32 = 4; // PA4
+const LRC_BIT: u32 = 5; // PA5
 const DIN_BIT: u32 = 10; // PA10
 
 const BCLK_HIGH: u32 = 1 << BCLK_BIT;
@@ -90,9 +90,9 @@ pub struct Max98357a {
 
 impl Max98357a {
     /// Initialize the driver for speaker-only playback.
-    pub fn new(pa3: PA3, pa4: PA4, pa10: PA10) -> Self {
-        let bclk = Output::new(pa3, Level::Low, Speed::VeryHigh);
-        let lrc = Output::new(pa4, Level::Low, Speed::VeryHigh);
+    pub fn new(pa4: PA4, pa5: PA5, pa10: PA10) -> Self {
+        let bclk = Output::new(pa4, Level::Low, Speed::VeryHigh);
+        let lrc = Output::new(pa5, Level::Low, Speed::VeryHigh);
         let din = Output::new(pa10, Level::Low, Speed::VeryHigh);
 
         unsafe {
@@ -112,9 +112,9 @@ impl Max98357a {
     }
 
     /// Initialize the driver for full audio I/O with both speaker and INMP441 microphone.
-    pub fn new_with_mic(pa3: PA3, pa4: PA4, pa10: PA10, pa1: PA1) -> Self {
-        let bclk = Output::new(pa3, Level::Low, Speed::VeryHigh);
-        let lrc = Output::new(pa4, Level::Low, Speed::VeryHigh);
+    pub fn new_with_mic(pa4: PA4, pa5: PA5, pa10: PA10, pa1: PA1) -> Self {
+        let bclk = Output::new(pa4, Level::Low, Speed::VeryHigh);
+        let lrc = Output::new(pa5, Level::Low, Speed::VeryHigh);
         let din = Output::new(pa10, Level::Low, Speed::VeryHigh);
         // Use Pull::None so the line floats when INMP441 tri-states, without fighting weak pulls
         let sd = Input::new(pa1, Pull::None);
@@ -190,9 +190,15 @@ impl Max98357a {
             let lrc = if i >= 32 { LRC_HIGH } else { LRC_LOW };
 
             // Falling edge: BCLK low, update WS and DIN
-            while (DWT::cycle_count().wrapping_sub(fall) as i32) < 0 {}
+            let mut lateness;
+            loop {
+                lateness = DWT::cycle_count().wrapping_sub(fall);
+                if (lateness as i32) >= 0 {
+                    break;
+                }
+            }
             unsafe { core::ptr::write_volatile(GPIOA_BSRR, BCLK_LOW | lrc | din) };
-            if DWT::cycle_count().wrapping_sub(fall) > LATE_THRESHOLD {
+            if lateness > LATE_THRESHOLD {
                 late += 1;
             }
 
