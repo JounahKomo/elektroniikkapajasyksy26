@@ -28,8 +28,8 @@ async fn main(_spawner: Spawner) {
     info!("Digital gain: {}x", GAIN);
     info!("");
     info!("Pinout (STM32L432KC Nucleo-32):");
-    info!("  INMP441 SCK  -> PA4 [Nucleo A3] (shared with MAX98357A BCLK)");
-    info!("  INMP441 WS   -> PA5 [Nucleo A4] (shared with MAX98357A LRC)");
+    info!("  INMP441 SCK  -> PA3 [Nucleo A2] (shared with MAX98357A BCLK)");
+    info!("  INMP441 WS   -> PA4 [Nucleo A3] (shared with MAX98357A LRC)");
     info!("  INMP441 SD   -> PA1 [Nucleo A1] (digital input to STM32)");
     info!("  INMP441 L/R  -> GND (Left channel) or 3.3V (Right channel)");
     info!("  INMP441 VDD  -> 3.3V, GND -> GND");
@@ -39,7 +39,7 @@ async fn main(_spawner: Spawner) {
     info!("=======================================================");
 
     // Initialize audio driver with speaker output (PA10) and microphone input (PA1)
-    let mut audio = Max98357a::new_with_mic(p.PA4, p.PA5, p.PA10, p.PA1);
+    let mut audio = Max98357a::new_with_mic(p.PA3, p.PA4, p.PA10, p.PA1);
 
     // Startup beep: confirm the amplifier is active and speaker produces sound
     info!("Testing speaker with 150 ms tone...");

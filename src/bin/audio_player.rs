@@ -64,8 +64,8 @@ async fn main(_spawner: Spawner) {
     info!("=== MAX98357A I2S Audio Player (80 MHz SYSCLK) ===");
     info!("===============================================");
     info!("I2S Pinout:");
-    info!("  BCLK    -> PA4  (I2S Bit Clock / SCK, Nucleo A3)");
-    info!("  LRC/WS  -> PA5  (I2S Left-Right Clock / WS, Nucleo A4)");
+    info!("  BCLK    -> PA3  (I2S Bit Clock / SCK, Nucleo A2)");
+    info!("  LRC/WS  -> PA4  (I2S Left-Right Clock / WS, Nucleo A3)");
     info!("  DIN     -> PA10 (I2S Data Out from STM32, Nucleo D2)");
     info!("Power & Config:");
     info!("  VIN     -> 5V   (Nucleo 5V, or 3.3V)");
@@ -77,7 +77,7 @@ async fn main(_spawner: Spawner) {
     info!("  MAX98357A '-' -> Speaker terminal 2");
 
     // Initialize MAX98357A I2S driver
-    let mut amp = Max98357a::new(p.PA4, p.PA5, p.PA10);
+    let mut amp = Max98357a::new(p.PA3, p.PA4, p.PA10);
 
     let mut track_idx: usize = 0;
 
