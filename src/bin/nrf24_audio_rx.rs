@@ -41,9 +41,13 @@ const VOLUME_SHIFT: u32 = 0;
 /// Diagnostic mode: 0 = play received audio, 1 = play a 1 kHz tone instead while "playing",
 /// 2 = play the tone continuously while the radio is still polled,
 /// 3 = play the tone continuously and never touch the radio SPI.
-const DIAG: u8 = 0;
+const DIAG: u8 = 2;
 /// One period of a 1 kHz tone at 8 kHz.
 const TONE_8K: [i16; 8] = [0, 21213, 30000, 21213, 0, -21213, -30000, -21213];
+
+/// Idle SPI steps (one step per 8 BCLK bits) between STATUS polls when no packet is waiting:
+/// 64 steps = 8 frames = 0.5 ms, well below the 4 ms packet interval.
+const POLL_WAIT_STEPS: u32 = 64;
 
 const SPI1_BASE: usize = 0x4001_3000;
 const SPI_CR2: *mut u32 = (SPI1_BASE + 0x04) as *mut u32;
@@ -91,6 +95,8 @@ struct Rx {
     sent: usize,
     recvd: usize,
     status: u8,
+    /// Steps to stay idle before the next STATUS poll (keeps SPI activity, and its noise, low)
+    wait: u32,
     /// Ring index where the first payload byte of the running read goes
     wbase: usize,
     // Statistics
@@ -153,7 +159,13 @@ impl Rx {
     #[inline(always)]
     fn spi_step(&mut self) {
         match self.stage {
-            Stage::Idle => self.begin(Stage::Status, 1),
+            Stage::Idle => {
+                if self.wait > 0 {
+                    self.wait -= 1;
+                } else {
+                    self.begin(Stage::Status, 1);
+                }
+            }
             Stage::ReadStart => {
                 // Payload bytes go to the buffer tail; head + count does not change when the
                 // playback side pops samples, so this base stays valid during the read.
@@ -190,6 +202,7 @@ impl Rx {
                         if self.stage == Stage::Status {
                             // RX_P_NO (STATUS bits 3:1) < 6 means the RX FIFO holds a payload
                             if ((self.status >> 1) & 0x07) > 5 {
+                                self.wait = POLL_WAIT_STEPS;
                                 self.stage = Stage::Idle;
                             } else if self.count + PAYLOAD_SIZE <= BUF_SIZE {
                                 self.stage = Stage::ReadStart;
@@ -239,7 +252,9 @@ async fn main(_spawner: Spawner) {
     info!("Expecting 32-byte packets of 8-bit unsigned PCM @ 8 kHz on channel 76.");
 
     let mut spi_config = Config::default();
-    spi_config.frequency = Hertz(5_000_000);
+    spi_config.frequency = Hertz(2_000_000);
+    // Slow edges: less noise coupled into the neighbouring I2S wires
+    spi_config.rise_fall_speed = Speed::Low;
     let spi = Spi::new_blocking(p.SPI1, p.PA5, p.PA7, p.PA6, spi_config);
     let mut radio = Nrf24::new(spi, ce, csn);
 
@@ -274,6 +289,7 @@ async fn main(_spawner: Spawner) {
         sent: 0,
         recvd: 0,
         status: 0,
+        wait: 0,
         wbase: 0,
         peak: 0,
         packets: 0,
