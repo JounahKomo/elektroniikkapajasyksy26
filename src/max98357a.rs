@@ -164,7 +164,7 @@ impl Max98357a {
     /// Returns `(left_sample, right_sample)`.
     #[inline(always)]
     pub fn exchange_frame(&mut self, left: u16, right: u16) -> (i16, i16) {
-        self.frame_core(left, right, false, None::<fn(i16) -> u16>, |_| {}).0
+        self.frame_core(left, right, false, None::<fn(i16) -> u16>).0
     }
 
     /// Transmit one frame (`tx` on both slots) and run `f` on the freshly received
@@ -178,7 +178,7 @@ impl Max98357a {
         use_right: bool,
         f: F,
     ) -> u16 {
-        self.frame_core(tx, tx, use_right, Some(f), |_| {}).1
+        self.frame_core(tx, tx, use_right, Some(f)).1
     }
 
     /// Transmit one frame (`tx` on both slots), calling `hook(bit)` for every one of the 64 BCLK
@@ -188,8 +188,54 @@ impl Max98357a {
     /// goes silent or buzzes. The hook must be very short (a few tens of cycles at most);
     /// do real work only on selected bit numbers.
     #[inline(always)]
-    pub fn exchange_frame_hook<H: FnMut(u32)>(&mut self, tx: u16, hook: H) {
-        let _ = self.frame_core(tx, tx, false, None::<fn(i16) -> u16>, hook);
+    pub fn exchange_frame_hook<H: FnMut(u32)>(&mut self, tx: u16, mut hook: H) {
+        let slot = (tx as u32) << 15;
+        let frame: u64 = ((slot as u64) << 32) | slot as u64;
+
+        let now = DWT::cycle_count();
+        let start = if (now.wrapping_sub(self.next_frame) as i32) > (BIT_CYCLES as i32) {
+            now
+        } else {
+            self.next_frame
+        };
+
+        let mut late = 0u32;
+        let mut i = 0u32;
+        while i < 64 {
+            let fall = start.wrapping_add(i * BIT_CYCLES);
+            let rise = fall.wrapping_add(HALF_CYCLES);
+
+            let din = if (frame >> (63 - i)) & 1 != 0 {
+                DIN_HIGH
+            } else {
+                DIN_LOW
+            };
+            let lrc = if i >= 32 { LRC_HIGH } else { LRC_LOW };
+
+            // Falling edge: BCLK low, update WS and DIN
+            let mut lateness;
+            loop {
+                lateness = DWT::cycle_count().wrapping_sub(fall);
+                if (lateness as i32) >= 0 {
+                    break;
+                }
+            }
+            unsafe { core::ptr::write_volatile(GPIOA_BSRR, BCLK_LOW | lrc | din) };
+            if lateness > LATE_THRESHOLD {
+                late += 1;
+            }
+
+            // Rising edge: sample on rising edge
+            while (DWT::cycle_count().wrapping_sub(rise) as i32) < 0 {}
+            unsafe { core::ptr::write_volatile(GPIOA_BSRR, BCLK_HIGH) };
+
+            hook(i);
+
+            i += 1;
+        }
+
+        self.late_bits = self.late_bits.wrapping_add(late);
+        self.next_frame = start.wrapping_add(FRAME_CYCLES);
     }
 
     /// Core bit-banged I2S frame (64 BCLK).
@@ -199,13 +245,12 @@ impl Max98357a {
     /// The optional callback runs right after the mic sample has been fully received
     /// (bit 17 for the left slot, bit 49 for the right slot), in the idle time of a half bit.
     #[inline(always)]
-    fn frame_core<F: FnOnce(i16) -> u16, H: FnMut(u32)>(
+    fn frame_core<F: FnOnce(i16) -> u16>(
         &mut self,
         left: u16,
         right: u16,
         mic_right: bool,
         mut cb: Option<F>,
-        mut hook: H,
     ) -> ((i16, i16), u16) {
         // Slot layout (bit 31 is transmitted first): 0, d15..d0, 0 x15
         let left_slot = (left as u32) << 15;
@@ -274,8 +319,6 @@ impl Max98357a {
                     next_tx = f(sample);
                 }
             }
-
-            hook(i);
 
             i += 1;
         }

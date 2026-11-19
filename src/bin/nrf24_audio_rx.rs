@@ -41,7 +41,7 @@ const VOLUME_SHIFT: u32 = 0;
 /// Diagnostic mode: 0 = play received audio, 1 = play a 1 kHz tone instead while "playing",
 /// 2 = play the tone continuously while the radio is still polled,
 /// 3 = play the tone continuously and never touch the radio SPI.
-const DIAG: u8 = 2;
+const DIAG: u8 = 0;
 /// One period of a 1 kHz tone at 8 kHz.
 const TONE_8K: [i16; 8] = [0, 21213, 30000, 21213, 0, -21213, -30000, -21213];
 
@@ -155,9 +155,28 @@ impl Rx {
         unsafe { core::ptr::write_volatile(GPIOA_BSRR, CSN_LOW) };
     }
 
-    /// Advance the SPI job by at most one byte. Never waits.
+    /// Receive step: checks if a byte finished shifting in SPI_SR and collects it.
+    /// Takes ~15 cycles, well under the 39-cycle BCLK half-period.
     #[inline(always)]
-    fn spi_step(&mut self) {
+    fn spi_rx_step(&mut self) {
+        if (self.stage == Stage::Status || self.stage == Stage::Read) && self.sent > self.recvd {
+            let sr = unsafe { core::ptr::read_volatile(SPI_SR) };
+            if sr & SR_RXNE != 0 {
+                let b = unsafe { core::ptr::read_volatile(SPI_DR8) };
+                if self.stage == Stage::Status {
+                    self.status = b;
+                } else if self.recvd > 0 {
+                    self.data[(self.wbase + self.recvd - 1) & MASK] = b;
+                }
+                self.recvd += 1;
+            }
+        }
+    }
+
+    /// Transmit step: initiates the next byte transfer or handles state transitions.
+    /// Takes ~10-15 cycles, well under the 39-cycle BCLK half-period.
+    #[inline(always)]
+    fn spi_tx_step(&mut self) {
         match self.stage {
             Stage::Idle => {
                 if self.wait > 0 {
@@ -167,26 +186,16 @@ impl Rx {
                 }
             }
             Stage::ReadStart => {
-                // Payload bytes go to the buffer tail; head + count does not change when the
-                // playback side pops samples, so this base stays valid during the read.
+                if self.count + PAYLOAD_SIZE > BUF_SIZE {
+                    // Jitter buffer full: drop oldest packet to maintain real-time audio and avoid stalling the radio FIFO
+                    self.head = (self.head + PAYLOAD_SIZE) & MASK;
+                    self.count -= PAYLOAD_SIZE;
+                    self.overruns += 1;
+                }
                 self.wbase = (self.head + self.count) & MASK;
                 self.begin(Stage::Read, PAYLOAD_SIZE + 1);
             }
             Stage::Status | Stage::Read => {
-                // Collect the byte that has finished shifting (if any) ...
-                if self.sent > self.recvd {
-                    let sr = unsafe { core::ptr::read_volatile(SPI_SR) };
-                    if sr & SR_RXNE != 0 {
-                        let b = unsafe { core::ptr::read_volatile(SPI_DR8) };
-                        if self.stage == Stage::Status {
-                            self.status = b;
-                        } else if self.recvd > 0 {
-                            self.data[(self.wbase + self.recvd - 1) & MASK] = b;
-                        }
-                        self.recvd += 1;
-                    }
-                }
-                // ... and start the next one once the previous one is fully received.
                 if self.sent == self.recvd {
                     if self.recvd < self.len {
                         let b = if self.stage == Stage::Read && self.sent == 0 {
@@ -200,15 +209,11 @@ impl Rx {
                         // Transfer complete
                         unsafe { core::ptr::write_volatile(GPIOA_BSRR, CSN_HIGH) };
                         if self.stage == Stage::Status {
-                            // RX_P_NO (STATUS bits 3:1) < 6 means the RX FIFO holds a payload
-                            if ((self.status >> 1) & 0x07) > 5 {
-                                self.wait = POLL_WAIT_STEPS;
-                                self.stage = Stage::Idle;
-                            } else if self.count + PAYLOAD_SIZE <= BUF_SIZE {
+                            // RX_P_NO (STATUS bits 3:1) <= 5 means the RX FIFO holds a payload
+                            if ((self.status >> 1) & 0x07) <= 5 {
                                 self.stage = Stage::ReadStart;
                             } else {
-                                // Buffer full: leave the packet in the radio FIFO for now
-                                self.overruns += 1;
+                                self.wait = POLL_WAIT_STEPS;
                                 self.stage = Stage::Idle;
                             }
                         } else {
@@ -229,8 +234,13 @@ impl Rx {
         audio.exchange_frame_hook(tx, |bit| {
             if bit == 17 {
                 self.next_sample();
-            } else if DIAG != 3 && bit & 7 == 2 {
-                self.spi_step();
+            } else if DIAG != 3 {
+                let slot = bit & 7;
+                if slot == 2 {
+                    self.spi_rx_step();
+                } else if slot == 6 {
+                    self.spi_tx_step();
+                }
             }
         });
     }
@@ -252,7 +262,7 @@ async fn main(_spawner: Spawner) {
     info!("Expecting 32-byte packets of 8-bit unsigned PCM @ 8 kHz on channel 76.");
 
     let mut spi_config = Config::default();
-    spi_config.frequency = Hertz(2_000_000);
+    spi_config.frequency = Hertz(4_000_000);
     // Slow edges: less noise coupled into the neighbouring I2S wires
     spi_config.rise_fall_speed = Speed::Low;
     let spi = Spi::new_blocking(p.SPI1, p.PA5, p.PA7, p.PA6, spi_config);
