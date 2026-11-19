@@ -36,8 +36,8 @@ const BUF_SIZE: usize = 2048;
 const PREBUFFER: usize = 512;
 /// Playback volume shift (0 = unchanged, 1 = 2x, ...). Samples are clipped.
 const VOLUME_SHIFT: u32 = 0;
-/// I2S frames (62.5 us each) between two radio polls: 8 = 0.5 ms.
-const POLL_INTERVAL: u32 = 8;
+/// I2S frames (62.5 us each) between two radio polls / housekeeping runs: 32 = 2 ms.
+const POLL_INTERVAL: u32 = 32;
 
 /// Diagnostic mode (leave at 0 for normal operation):
 /// 0 = play the received audio.
@@ -51,12 +51,25 @@ const CMD_NOP: u8 = 0xFF;
 const CMD_R_RX_PAYLOAD: u8 = 0x61;
 
 /// Playback state: jitter buffer plus the 8 kHz -> 16 kHz sample feeder and statistics.
+///
+/// Per-frame work is kept to a minimum and runs *inside* the I2S frame (see
+/// [`Player::frame`]): any extra work between two frames stretches a BCLK pulse, which was
+/// found to leave the MAX98357A silent. Everything else (start/stop decisions, statistics,
+/// logging) happens in [`Player::service`], which is called only every `POLL_INTERVAL` frames.
 struct Player {
-    data: [u8; BUF_SIZE],
+    /// Jitter buffer of ready-to-play 16-bit samples
+    data: [i16; BUF_SIZE],
     head: usize,
     count: usize,
     playing: bool,
+    /// Sample currently being sent (each 8 kHz sample covers two frames)
     sample: i16,
+    /// Frame parity: a new sample is fetched on every second frame
+    odd: bool,
+    /// Sample for the next frame, as returned from the in-frame callback
+    tx: u16,
+    tone_phase: usize,
+    // statistics
     frames: u32,
     peak: u16,
     packets: u32,
@@ -66,7 +79,7 @@ struct Player {
 }
 
 impl Player {
-    /// Append a packet; counts an overrun (and drops it) if it does not fit.
+    /// Append a packet (converted to signed 16-bit); counts an overrun and drops it if full.
     fn push(&mut self, samples: &[u8]) {
         self.packets += 1;
         if self.count + samples.len() > BUF_SIZE {
@@ -74,49 +87,57 @@ impl Player {
             return;
         }
         for &s in samples {
-            self.data[(self.head + self.count) & (BUF_SIZE - 1)] = s;
+            let v = ((s as i32) - 128) << (8 + VOLUME_SHIFT);
+            self.data[(self.head + self.count) & (BUF_SIZE - 1)] = v.clamp(-32768, 32767) as i16;
             self.count += 1;
         }
     }
 
-    fn pop(&mut self) -> u8 {
-        let s = self.data[self.head];
-        self.head = (self.head + 1) & (BUF_SIZE - 1);
-        self.count -= 1;
-        s
+    /// In-frame callback: pick the sample for the next frame. Must stay very short.
+    #[inline(always)]
+    fn next_sample(&mut self) -> u16 {
+        self.odd = !self.odd;
+        if !self.odd {
+            if DIAG == 2 {
+                self.sample = TONE_8K[self.tone_phase & 7];
+                self.tone_phase += 1;
+            } else if self.playing && self.count > 0 {
+                self.sample = if DIAG == 1 {
+                    self.tone_phase += 1;
+                    TONE_8K[self.tone_phase & 7]
+                } else {
+                    self.data[self.head]
+                };
+                self.head = (self.head + 1) & (BUF_SIZE - 1);
+                self.count -= 1;
+            } else {
+                self.sample = 0;
+            }
+        }
+        self.sample as u16
     }
 
-    /// Clock exactly one I2S frame. Each 8 kHz sample is sent in two consecutive 16 kHz frames.
+    /// Clock exactly one I2S frame; the next sample is chosen inside the frame.
     #[inline(always)]
     fn frame(&mut self, audio: &mut Max98357a) {
-        if self.frames & 1 == 0 {
-            if !self.playing && self.count >= PREBUFFER {
-                self.playing = true;
-                self.led.set_high();
-            }
-            if self.playing && self.count == 0 {
-                self.playing = false;
-                self.underruns += 1;
-                self.led.set_low();
-            }
-            self.sample = if DIAG == 2 {
-                TONE_8K[((self.frames >> 1) & 7) as usize]
-            } else if self.playing {
-                let v = ((self.pop() as i32) - 128) << (8 + VOLUME_SHIFT);
-                if DIAG == 1 {
-                    TONE_8K[((self.frames >> 1) & 7) as usize]
-                } else {
-                    v.clamp(-32768, 32767) as i16
-                }
-            } else {
-                0
-            };
-            self.peak = self.peak.max(self.sample.unsigned_abs());
-        }
-
-        let _ = audio.exchange_frame(self.sample as u16, self.sample as u16);
-
+        let tx = self.tx;
+        self.tx = audio.exchange_frame_dsp(tx, false, |_| self.next_sample());
         self.frames += 1;
+    }
+
+    /// Housekeeping, called every `POLL_INTERVAL` frames: playback state, LED, statistics.
+    fn service(&mut self, audio: &Max98357a) {
+        if !self.playing && self.count >= PREBUFFER {
+            self.playing = true;
+            self.led.set_high();
+        }
+        if self.playing && self.count == 0 {
+            self.playing = false;
+            self.underruns += 1;
+            self.led.set_low();
+        }
+        self.peak = self.peak.max(self.sample.unsigned_abs());
+
         if self.frames >= 16_000 {
             info!(
                 "Packets: {}, buffered: {} samples, peak: {}, underruns: {}, overruns: {}, late bits: {}",
@@ -205,11 +226,14 @@ async fn main(_spawner: Spawner) {
     audio.play_tone(1000, 150);
 
     let mut player = Player {
-        data: [128; BUF_SIZE],
+        data: [0; BUF_SIZE],
         head: 0,
         count: 0,
         playing: false,
         sample: 0,
+        odd: true,
+        tx: 0,
+        tone_phase: 0,
         frames: 0,
         peak: 0,
         packets: 0,
@@ -222,13 +246,13 @@ async fn main(_spawner: Spawner) {
     let mut rx = [0u8; PAYLOAD_SIZE + 1];
 
     loop {
-        if DIAG == 2 {
-            player.frame(&mut audio);
-            continue;
-        }
         // Play audio frames with no radio activity at all in between
         for _ in 0..POLL_INTERVAL {
             player.frame(&mut audio);
+        }
+        player.service(&audio);
+        if DIAG == 2 {
+            continue;
         }
 
         // Read the STATUS register (a NOP command returns it); drain every waiting packet
