@@ -18,7 +18,8 @@ The objective of this project is to design and build a functional radiophone. Th
   - NRF24L01 2.4 GHz RF transceiver module (SPI1)
   - MAX98357A I2S Class-D mono audio amplifier with passive speaker
   - INMP441 I2S digital MEMS microphone
-  - PTT controls and power management
+  - Push-to-talk (PTT) push button
+  - Power management
 
 ### Software Stack & Tools
 
@@ -67,6 +68,16 @@ The objective of this project is to design and build a functional radiophone. Th
 | **GAIN** | *Leave unconnected* | Floating selects 9 dB standard gain |
 | **"+"** | Speaker terminal 1 | Bridge-Tied Load (BTL) speaker output |
 | **"-"** | Speaker terminal 2 | Bridge-Tied Load (BTL) speaker output |
+
+### 4. Push-to-Talk (PTT) Button
+| Button Terminal | Nucleo-L432KC Pin / Connection | Description / Function |
+| :--- | :--- | :--- |
+| **Terminal 1** | **PB1** (D6) | Button input, configured with the internal pull-up resistor |
+| **Terminal 2** | **GND** | Ground |
+
+The button is **active low**: PB1 reads high while released and low while pressed, so no external resistor is needed. Debouncing is done in firmware.
+
+PB1 was chosen because it is a plain GPIO that is not used by anything else in the project: it avoids the NRF24L01 SPI1 pins (PA5/PA6/PA7), CSN/CE (PA11/PB0), the I2S audio pins (PA1/PA3/PA4/PA10), the LEDs (PB3/PB4), the ST-LINK virtual COM port (PA2/PA15) and the SWD debug pins (PA13/PA14). It also has its own EXTI line (EXTI1), so it can later be used as an interrupt-driven input without clashing with the NRF24 CE pin on PB0.
 
 ---
 
@@ -216,6 +227,7 @@ Connect the Nucleo-L432KC board via USB.
 - [x] INMP441 I2S MEMS microphone capture and echo test (`mic_test`)
 - [x] Real-time direct microphone-to-speaker live feed (`mic_direct`)
 - [x] NRF24L01 audio packet receiver playing on the speaker (`nrf24_audio_rx`)
+- [x] PTT button pin selected and documented (PB1, active low)
 - [ ] Push-to-Talk (PTT) button input handling with debouncing
 - [ ] Half-duplex transmit and receive state machine
 - [ ] Enclosure and final hardware assembly
