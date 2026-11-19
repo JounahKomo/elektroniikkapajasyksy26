@@ -13,7 +13,7 @@
 //! The I2S clocks are bit-banged by the CPU and must run *perfectly continuously*: any pause
 //! (such as a blocking SPI transfer to the radio) makes the MAX98357A drop out and stay silent.
 //! So the radio is read with a register-level SPI state machine (`RadioPoller`) that is
-//! stepped from inside the I2S bit loop, one tiny step per BCLK bit. A jitter buffer absorbs
+//! stepped from inside the I2S bit loop, one tiny step every fourth BCLK bit. A jitter buffer absorbs
 //! packet timing variation: playback starts once `PREBUFFER` samples have arrived and
 //! re-buffers after an underrun.
 
@@ -75,7 +75,6 @@ const SPI_CR2: *mut u32 = (SPI1_BASE + 0x04) as *mut u32;
 const SPI_SR: *const u32 = (SPI1_BASE + 0x08) as *const u32;
 const SPI_DR8: *mut u8 = (SPI1_BASE + 0x0C) as *mut u8;
 const SR_RXNE: u32 = 1 << 0;
-const SR_TXE: u32 = 1 << 1;
 const CR2_FRXTH: u32 = 1 << 12;
 const GPIOA_BSRR: *mut u32 = 0x4800_0018 as *mut u32;
 const CSN_LOW: u32 = 1 << (11 + 16); // PA11
@@ -89,6 +88,8 @@ enum Stage {
     Idle,
     /// Reading the STATUS register (1 byte).
     Status,
+    /// Pending start of the payload read (keeps CSN high for a moment in between).
+    ReadStart,
     /// Reading a payload from the RX FIFO (1 command + 32 bytes).
     Read,
     /// A packet is waiting in `buf[1..]`; paused until the main loop has consumed it.
@@ -139,32 +140,36 @@ impl RadioPoller {
             }
             Stage::Status | Stage::Read => {
                 let sr = unsafe { core::ptr::read_volatile(SPI_SR) };
-                if self.sent > self.recvd {
-                    if sr & SR_RXNE != 0 {
-                        self.buf[self.recvd] = unsafe { core::ptr::read_volatile(SPI_DR8) };
-                        self.recvd += 1;
-                    }
-                } else if self.recvd < self.len {
-                    if sr & SR_TXE != 0 {
-                        unsafe { core::ptr::write_volatile(SPI_DR8, self.buf[self.sent]) };
+                // Collect the byte that has finished shifting (if any) ...
+                if self.sent > self.recvd && sr & SR_RXNE != 0 {
+                    let b = unsafe { core::ptr::read_volatile(SPI_DR8) };
+                    unsafe { *self.buf.get_unchecked_mut(self.recvd) = b };
+                    self.recvd += 1;
+                }
+                // ... and start the next one once the previous is fully received.
+                if self.sent == self.recvd {
+                    if self.recvd < self.len {
+                        let b = unsafe { *self.buf.get_unchecked(self.sent) };
+                        unsafe { core::ptr::write_volatile(SPI_DR8, b) };
                         self.sent += 1;
-                    }
-                } else {
-                    // Transfer complete
-                    unsafe { core::ptr::write_volatile(GPIOA_BSRR, CSN_HIGH) };
-                    if self.stage == Stage::Status {
-                        // RX_P_NO (STATUS bits 3:1) < 6 means the RX FIFO holds a payload
-                        if ((self.buf[0] >> 1) & 0x07) <= 5 {
-                            self.buf[0] = CMD_R_RX_PAYLOAD;
-                            self.begin(Stage::Read, PAYLOAD_SIZE + 1);
-                        } else {
-                            self.stage = Stage::Idle;
-                        }
                     } else {
-                        self.stage = Stage::Hold;
+                        // Transfer complete
+                        unsafe { core::ptr::write_volatile(GPIOA_BSRR, CSN_HIGH) };
+                        if self.stage == Stage::Status {
+                            // RX_P_NO (STATUS bits 3:1) < 6 means the RX FIFO holds a payload
+                            if ((self.buf[0] >> 1) & 0x07) <= 5 {
+                                self.buf[0] = CMD_R_RX_PAYLOAD;
+                                self.stage = Stage::ReadStart;
+                            } else {
+                                self.stage = Stage::Idle;
+                            }
+                        } else {
+                            self.stage = Stage::Hold;
+                        }
                     }
                 }
             }
+            Stage::ReadStart => self.begin(Stage::Read, PAYLOAD_SIZE + 1),
         }
     }
 

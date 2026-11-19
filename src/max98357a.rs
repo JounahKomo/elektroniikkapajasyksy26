@@ -181,10 +181,10 @@ impl Max98357a {
         self.frame_core(tx, tx, use_right, Some(f), || {}).1
     }
 
-    /// Transmit one frame like [`Self::exchange_frame`], calling `hook` once per BCLK bit in the
-    /// idle time after the rising edge (64 times per frame). This lets other work, such as a
+    /// Transmit one frame like [`Self::exchange_frame`], calling `hook` 16 times per frame (every
+    /// 4th BCLK bit) in the idle time after the rising edge. This lets other work, such as a
     /// register-level SPI state machine, make progress without ever stalling the I2S clocks.
-    /// `hook` must be very short (well under ~30 cycles) or bits are clocked late.
+    /// `hook` must be short (well under ~60 cycles) or the following edge is clocked late.
     #[inline(always)]
     pub fn exchange_frame_hook<H: FnMut()>(&mut self, left: u16, right: u16, hook: H) -> (i16, i16) {
         self.frame_core(left, right, false, None::<fn(i16) -> u16>, hook).0
@@ -273,7 +273,10 @@ impl Max98357a {
                 }
             }
 
-            hook();
+            // Every 4th bit only: leaves the other bits untouched so the timing budget holds
+            if i & 3 == 2 {
+                hook();
+            }
 
             i += 1;
         }
