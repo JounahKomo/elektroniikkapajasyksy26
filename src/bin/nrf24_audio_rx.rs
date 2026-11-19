@@ -38,7 +38,9 @@ const MASK: usize = BUF_SIZE - 1;
 const PREBUFFER: usize = 512;
 /// Playback volume shift (0 = unchanged, 1 = 2x, ...). Samples are clipped.
 const VOLUME_SHIFT: u32 = 0;
-/// Diagnostic mode: 0 = play received audio, 1 = play a 1 kHz tone instead while "playing".
+/// Diagnostic mode: 0 = play received audio, 1 = play a 1 kHz tone instead while "playing",
+/// 2 = play the tone continuously while the radio is still polled,
+/// 3 = play the tone continuously and never touch the radio SPI.
 const DIAG: u8 = 0;
 /// One period of a 1 kHz tone at 8 kHz.
 const TONE_8K: [i16; 8] = [0, 21213, 30000, 21213, 0, -21213, -30000, -21213];
@@ -114,7 +116,10 @@ impl Rx {
             self.underruns += 1;
             unsafe { core::ptr::write_volatile(GPIOB_BSRR, LED_OFF) };
         }
-        if self.playing {
+        if DIAG >= 2 {
+            self.tone_phase += 1;
+            self.sample = TONE_8K[self.tone_phase & 7];
+        } else if self.playing {
             let raw = self.data[self.head];
             self.head = (self.head + 1) & MASK;
             self.count -= 1;
@@ -211,7 +216,7 @@ impl Rx {
         audio.exchange_frame_hook(tx, |bit| {
             if bit == 17 {
                 self.next_sample();
-            } else if bit & 7 == 2 {
+            } else if DIAG != 3 && bit & 7 == 2 {
                 self.spi_step();
             }
         });
