@@ -8,10 +8,11 @@ use nucleo_l432kc_app::max98357a::{config_80mhz, Max98357a};
 use {defmt_rtt as _, panic_probe as _};
 
 /// Digital amplification factor for live monitoring.
-/// INMP441 sensitivity is -26 dBFS at 94 dB SPL.
-/// Normal speech at 20 cm produces ~30..150 peak in top 16 bits.
-/// 8x boost scales normal speech to ~250..1,500 peak; loud sounds clip at 100%.
-const GAIN: i32 = 8;
+/// INMP441 sensitivity is -26 dBFS at 94 dB SPL, so normal speech (~65 dB SPL) only reaches
+/// a peak of roughly 30..150 in the 16-bit range, i.e. well under 1% of full scale.
+/// A small gain (the old 8x) leaves the speaker practically silent; 64x brings speech to
+/// ~2,000..10,000 (6..30%), and loud sounds simply clip.
+const GAIN: i32 = 64;
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {

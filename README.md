@@ -91,8 +91,8 @@ The objective of this project is to design and build a functional radiophone. Th
 │   │   ├── nrf24_rx.rs      # NRF24L01 packet receiver test (Enhanced ShockBurst RX)
 │   │   ├── speakers.rs      # MAX98357A I2S beep test (1 kHz sine tone on PA3/PA4/PA10)
 │   │   ├── audio_player.rs  # MAX98357A I2S audio file player (PA3/PA4/PA10)
-│   │   ├── mic_test.rs      # Microphone listen & speaker playback loop test (INMP441 + MAX98357A)
-│   │   └── mic_direct.rs    # Real-time direct microphone-to-speaker pass-through (~62.5 µs latency)
+│   │   ├── mic_test.rs      # Microphone listen & speaker playback loop test (INMP441 + MAX98357A, auto-gain)
+│   │   └── mic_direct.rs    # Real-time direct microphone-to-speaker pass-through (~62.5 µs latency, 64x gain)
 │   ├── lib.rs           # Library root exporting reusable modules
 │   ├── max98357a.rs     # MAX98357A & INMP441 I2S audio driver (cycle-accurate DWT timing)
 │   ├── nrf24.rs         # NRF24L01 driver module (registers, TX/RX configuration, packet handling)
@@ -178,13 +178,13 @@ Connect the Nucleo-L432KC board via USB.
    ```bash
    cargo run --bin mic_test
    ```
-   Listens to the INMP441 MEMS microphone for 2.0 seconds (16-bit PCM @ 8,000 Hz), removes DC bias, measures voice levels, and immediately plays the captured voice back through the MAX98357A amplifier and speaker in a continuous echo loop.
+   Listens to the INMP441 MEMS microphone for 2.0 seconds (16-bit PCM @ 8,000 Hz), removes DC bias, measures voice levels, normalises the volume with automatic digital gain (the INMP441 signal is very quiet), and immediately plays the captured voice back through the MAX98357A amplifier and speaker in a continuous echo loop.
 
 9. **Run the Direct Live Microphone-to-Speaker Feed**:
    ```bash
    cargo run --bin mic_direct
    ```
-   Streams live microphone audio directly to the speaker in real-time with near-zero latency (~62.5 µs, 1 audio frame), high-pass DC blocking, and 2x digital amplification.
+   Streams live microphone audio directly to the speaker in real-time with near-zero latency (~62.5 µs, 1 audio frame), high-pass DC blocking, and 64x digital amplification (the raw INMP441 signal is under 1% of full scale; lower `GAIN` in `mic_direct.rs` if it feeds back).
 
 10. **Run the Main Firmware**:
     ```bash

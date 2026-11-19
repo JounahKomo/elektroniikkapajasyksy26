@@ -111,7 +111,7 @@ async fn main(_spawner: Spawner) {
         // 3. Audio processing:
         //    a) Calculate and subtract DC bias (mean)
         //    b) Measure peak amplitude
-        //    c) Apply 4x digital gain with saturation
+        //    c) Apply auto-normalising digital gain
         let mut sum: i64 = 0;
         for &s in buf.iter() {
             sum += s as i64;
@@ -121,15 +121,24 @@ async fn main(_spawner: Spawner) {
         let mut max_abs: i16 = 0;
         for s in buf.iter_mut() {
             // Remove DC bias
-            let centered = s.saturating_sub(dc_offset);
-            // Measure peak
-            let abs_val = centered.saturating_abs();
+            *s = s.saturating_sub(dc_offset);
+            let abs_val = s.saturating_abs();
             if abs_val > max_abs {
                 max_abs = abs_val;
             }
-            // 4x digital gain for loud, clear playback on the speaker
-            *s = centered.saturating_mul(4);
         }
+
+        // Auto-gain: speech from the INMP441 only peaks at ~30..150 (<1% of full scale), so a
+        // fixed small gain is inaudible. Normalise the peak to ~70% of full scale (max 512x).
+        let gain: i32 = if max_abs > 0 {
+            (23_000 / max_abs as i32).clamp(1, 512)
+        } else {
+            1
+        };
+        for s in buf.iter_mut() {
+            *s = ((*s as i32) * gain).clamp(-32767, 32767) as i16;
+        }
+        info!("Applied digital gain: {}x", gain);
 
         info!(
             "Raw samples [0..4]: [{}, {}, {}, {}]",
@@ -140,7 +149,7 @@ async fn main(_spawner: Spawner) {
             dc_offset, max_abs
         );
 
-        if max_abs < 100 {
+        if max_abs < 8 {
             info!("WARNING: No audio signal detected on PA1. Check INMP441 wiring (VDD=3.3V, GND, SCK=PA3, WS=PA4, SD=PA1)!");
         } else {
             info!(
