@@ -181,65 +181,6 @@ impl Max98357a {
         self.frame_core(tx, tx, use_right, Some(f)).1
     }
 
-    /// Transmit one frame (`tx` on both slots), calling `hook(bit)` for every one of the 64 BCLK
-    /// bits right after its rising edge, in the idle time before the next edge. All per-frame
-    /// work (choosing the next sample, stepping a register-level SPI state machine, ...) must
-    /// happen in here: any work *between* frames stretches a BCLK pulse and the MAX98357A
-    /// goes silent or buzzes. The hook must be very short (a few tens of cycles at most);
-    /// do real work only on selected bit numbers.
-    #[inline(always)]
-    pub fn exchange_frame_hook<H: FnMut(u32)>(&mut self, tx: u16, mut hook: H) {
-        let slot = (tx as u32) << 15;
-        let frame: u64 = ((slot as u64) << 32) | slot as u64;
-
-        let now = DWT::cycle_count();
-        let start = if (now.wrapping_sub(self.next_frame) as i32) > (BIT_CYCLES as i32) {
-            now
-        } else {
-            self.next_frame
-        };
-
-        let mut late = 0u32;
-        let mut i = 0u32;
-        while i < 64 {
-            let fall = start.wrapping_add(i * BIT_CYCLES);
-            let rise = fall.wrapping_add(HALF_CYCLES);
-
-            let din = if (frame >> (63 - i)) & 1 != 0 {
-                DIN_HIGH
-            } else {
-                DIN_LOW
-            };
-            let lrc = if i >= 32 { LRC_HIGH } else { LRC_LOW };
-
-            // Falling edge: BCLK low, update WS and DIN
-            let mut lateness;
-            loop {
-                lateness = DWT::cycle_count().wrapping_sub(fall);
-                if (lateness as i32) >= 0 {
-                    break;
-                }
-            }
-            unsafe { core::ptr::write_volatile(GPIOA_BSRR, BCLK_LOW | lrc | din) };
-            if lateness > LATE_THRESHOLD {
-                late += 1;
-            }
-
-            // Rising edge: sample on rising edge
-            while (DWT::cycle_count().wrapping_sub(rise) as i32) < 0 {}
-            unsafe { core::ptr::write_volatile(GPIOA_BSRR, BCLK_HIGH) };
-
-            if i == 17 || i == 33 || i == 49 {
-                hook(i);
-            }
-
-            i += 1;
-        }
-
-        self.late_bits = self.late_bits.wrapping_add(late);
-        self.next_frame = start.wrapping_add(FRAME_CYCLES);
-    }
-
     /// Core bit-banged I2S frame (64 BCLK).
     ///
     /// Philips I2S: WS changes on a BCLK falling edge, the MSB follows one BCLK later.

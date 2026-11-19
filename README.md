@@ -95,6 +95,7 @@ The objective of this project is to design and build a functional radiophone. Th
 │   │   ├── mic_test.rs      # Microphone listen & speaker playback loop test (INMP441 + MAX98357A, auto-gain)
 │   │   └── mic_direct.rs    # Real-time direct microphone-to-speaker pass-through (~62.5 µs latency, 64x gain)
 │   ├── lib.rs           # Library root exporting reusable modules
+│   ├── i2s_dma.rs       # Hardware-timed I2S output to the MAX98357A (TIM2 BCLK + DMA, same pins)
 │   ├── max98357a.rs     # MAX98357A & INMP441 I2S audio driver (cycle-accurate DWT timing)
 │   ├── nrf24.rs         # NRF24L01 driver module (registers, TX/RX configuration, packet handling)
 │   └── main.rs          # Main radiophone firmware application
@@ -191,7 +192,7 @@ Connect the Nucleo-L432KC board via USB.
     ```bash
     cargo run --bin nrf24_audio_rx
     ```
-    Listens on Channel 76 for audio packets and plays them on the MAX98357A speaker. Each 32-byte packet must carry 32 samples of 8-bit unsigned PCM (silence = 128) at 8 kHz (4 ms of audio), the same format as the `audio/*.raw` files. The bit-banged I2S clocks must be perfectly regular (even a 1 us pause between frames makes the amplifier buzz or go silent), so no work happens between frames: the next sample is chosen and the radio is polled by a register-level SPI state machine from inside the I2S frame, one byte per 8 BCLK bits. A 64 ms jitter buffer smooths packet timing; the log shows packets per second, buffer level, peak sample level, underruns, overruns and late bits once per second. Set `DIAG` in the source to 1-3 to play a test tone instead of the radio audio (2: radio still polled, 3: radio untouched) when debugging the speaker path. Compatible with `nrf24_audio_file_tx` from the transmitter project. A beep at start-up confirms the speaker path. Needs the radio wiring (SPI1) and the speaker wiring (PA3/PA4/PA10) at the same time; a transmitter sending audio packets is required to hear anything.
+    Listens on Channel 76 for audio packets and plays them on the MAX98357A speaker. Each 32-byte packet must carry 32 samples of 8-bit unsigned PCM (silence = 128) at 8 kHz (4 ms of audio), the same format as the `audio/*.raw` files. The speaker is driven by the hardware-timed I2S driver (`i2s_dma.rs`): TIM2 generates BCLK on PA3 and DMA writes LRC/DIN, so the clocks stay perfectly regular while the radio is read with ordinary blocking SPI (the bit-banged driver could not keep its clocks regular while talking to the radio, and the amplifier muted). Same wiring as the other audio programs. A 64 ms jitter buffer smooths packet timing; the log shows packets per second, buffer level, peak sample level, underruns, overruns and the lowest I2S queue level once per second (it should stay close to 63 frames). A beep at start-up confirms the speaker path. Set `DIAG` in the source to 1 (test tone, radio untouched) or 2 (test tone while the radio is polled) when debugging the speaker path. Compatible with `nrf24_audio_file_tx` from the transmitter project. Needs the radio wiring (SPI1) and the speaker wiring (PA3/PA4/PA10) at the same time; a transmitter sending audio packets is required to hear anything.
 
 11. **Run the Main Firmware**:
     ```bash
