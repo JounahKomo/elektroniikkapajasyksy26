@@ -229,7 +229,9 @@ impl Max98357a {
             while (DWT::cycle_count().wrapping_sub(rise) as i32) < 0 {}
             unsafe { core::ptr::write_volatile(GPIOA_BSRR, BCLK_HIGH) };
 
-            hook(i);
+            if i == 17 || i == 33 || i == 49 {
+                hook(i);
+            }
 
             i += 1;
         }

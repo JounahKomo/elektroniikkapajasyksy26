@@ -47,13 +47,11 @@ const TONE_8K: [i16; 8] = [0, 21213, 30000, 21213, 0, -21213, -30000, -21213];
 
 /// Idle SPI steps (one step per 8 BCLK bits) between STATUS polls when no packet is waiting:
 /// 64 steps = 8 frames = 0.5 ms, well below the 4 ms packet interval.
-const POLL_WAIT_STEPS: u32 = 64;
+const POLL_WAIT_STEPS: u32 = 16;
 
 const SPI1_BASE: usize = 0x4001_3000;
 const SPI_CR2: *mut u32 = (SPI1_BASE + 0x04) as *mut u32;
-const SPI_SR: *const u32 = (SPI1_BASE + 0x08) as *const u32;
 const SPI_DR8: *mut u8 = (SPI1_BASE + 0x0C) as *mut u8;
-const SR_RXNE: u32 = 1 << 0;
 const CR2_FRXTH: u32 = 1 << 12;
 const GPIOA_BSRR: *mut u32 = 0x4800_0018 as *mut u32;
 const GPIOB_BSRR: *mut u32 = 0x4800_0418 as *mut u32;
@@ -66,18 +64,17 @@ const CMD_R_RX_PAYLOAD: u8 = 0x61;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Stage {
-    /// Nothing running: start a STATUS read next step.
+    /// Idle: waiting between status polls
     Idle,
-    /// Reading the STATUS register (1 byte).
-    Status,
-    /// Payload read about to start (keeps CSN high for a moment in between).
-    ReadStart,
-    /// Reading a payload from the RX FIFO (1 command + 32 bytes).
-    Read,
+    /// STATUS poll command sent, waiting to read result
+    StatusWait,
+    /// R_RX_PAYLOAD command sent, waiting to read command byte response
+    ReadCmdWait,
+    /// Reading 32 payload data bytes (1 byte per invocation)
+    ReadPayload,
 }
 
-/// Receiver state: jitter buffer, playback feeder and the non-blocking SPI state machine.
-/// Everything here runs from the I2S frame hook, so every method is deliberately tiny.
+/// Receiver state: jitter buffer, playback feeder and non-blocking SPI state machine.
 struct Rx {
     // Jitter buffer of raw unsigned 8-bit samples
     data: [u8; BUF_SIZE],
@@ -91,13 +88,8 @@ struct Rx {
     tone_phase: usize,
     // SPI state machine
     stage: Stage,
-    len: usize,
-    sent: usize,
     recvd: usize,
-    status: u8,
-    /// Steps to stay idle before the next STATUS poll (keeps SPI activity, and its noise, low)
     wait: u32,
-    /// Ring index where the first payload byte of the running read goes
     wbase: usize,
     // Statistics
     peak: u16,
@@ -146,82 +138,56 @@ impl Rx {
         self.tx = self.sample as u16;
     }
 
+    /// Single non-blocking SPI step. Runs at bits 33 and 49 (~15.6 us apart).
+    /// At 4 MHz SPI, an 8-bit byte takes 2.0 us, so the previous byte is 100% finished shifting.
+    /// Execution time is ~12-16 cycles, well within the 39-cycle BCLK half-period.
     #[inline(always)]
-    fn begin(&mut self, stage: Stage, len: usize) {
-        self.stage = stage;
-        self.len = len;
-        self.sent = 0;
-        self.recvd = 0;
-        unsafe { core::ptr::write_volatile(GPIOA_BSRR, CSN_LOW) };
-    }
-
-    /// Receive step: checks if a byte finished shifting in SPI_SR and collects it.
-    /// Takes ~15 cycles, well under the 39-cycle BCLK half-period.
-    #[inline(always)]
-    fn spi_rx_step(&mut self) {
-        if (self.stage == Stage::Status || self.stage == Stage::Read) && self.sent > self.recvd {
-            let sr = unsafe { core::ptr::read_volatile(SPI_SR) };
-            if sr & SR_RXNE != 0 {
-                let b = unsafe { core::ptr::read_volatile(SPI_DR8) };
-                if self.stage == Stage::Status {
-                    self.status = b;
-                } else if self.recvd > 0 {
-                    self.data[(self.wbase + self.recvd - 1) & MASK] = b;
-                }
-                self.recvd += 1;
-            }
-        }
-    }
-
-    /// Transmit step: initiates the next byte transfer or handles state transitions.
-    /// Takes ~10-15 cycles, well under the 39-cycle BCLK half-period.
-    #[inline(always)]
-    fn spi_tx_step(&mut self) {
+    fn spi_step(&mut self) {
         match self.stage {
             Stage::Idle => {
                 if self.wait > 0 {
                     self.wait -= 1;
                 } else {
-                    self.begin(Stage::Status, 1);
+                    unsafe { core::ptr::write_volatile(GPIOA_BSRR, CSN_LOW) };
+                    unsafe { core::ptr::write_volatile(SPI_DR8, CMD_NOP) };
+                    self.stage = Stage::StatusWait;
                 }
             }
-            Stage::ReadStart => {
-                if self.count + PAYLOAD_SIZE > BUF_SIZE {
-                    // Jitter buffer full: drop oldest packet to maintain real-time audio and avoid stalling the radio FIFO
-                    self.head = (self.head + PAYLOAD_SIZE) & MASK;
-                    self.count -= PAYLOAD_SIZE;
-                    self.overruns += 1;
-                }
-                self.wbase = (self.head + self.count) & MASK;
-                self.begin(Stage::Read, PAYLOAD_SIZE + 1);
-            }
-            Stage::Status | Stage::Read => {
-                if self.sent == self.recvd {
-                    if self.recvd < self.len {
-                        let b = if self.stage == Stage::Read && self.sent == 0 {
-                            CMD_R_RX_PAYLOAD
-                        } else {
-                            CMD_NOP
-                        };
-                        unsafe { core::ptr::write_volatile(SPI_DR8, b) };
-                        self.sent += 1;
-                    } else {
-                        // Transfer complete
-                        unsafe { core::ptr::write_volatile(GPIOA_BSRR, CSN_HIGH) };
-                        if self.stage == Stage::Status {
-                            // RX_P_NO (STATUS bits 3:1) <= 5 means the RX FIFO holds a payload
-                            if ((self.status >> 1) & 0x07) <= 5 {
-                                self.stage = Stage::ReadStart;
-                            } else {
-                                self.wait = POLL_WAIT_STEPS;
-                                self.stage = Stage::Idle;
-                            }
-                        } else {
-                            self.count += PAYLOAD_SIZE;
-                            self.packets += 1;
-                            self.stage = Stage::Idle;
-                        }
+            Stage::StatusWait => {
+                let status = unsafe { core::ptr::read_volatile(SPI_DR8) };
+                unsafe { core::ptr::write_volatile(GPIOA_BSRR, CSN_HIGH) };
+                if ((status >> 1) & 0x07) <= 5 {
+                    if self.count + PAYLOAD_SIZE > BUF_SIZE {
+                        self.head = (self.head + PAYLOAD_SIZE) & MASK;
+                        self.count -= PAYLOAD_SIZE;
+                        self.overruns += 1;
                     }
+                    self.wbase = (self.head + self.count) & MASK;
+                    self.recvd = 0;
+                    unsafe { core::ptr::write_volatile(GPIOA_BSRR, CSN_LOW) };
+                    unsafe { core::ptr::write_volatile(SPI_DR8, CMD_R_RX_PAYLOAD) };
+                    self.stage = Stage::ReadCmdWait;
+                } else {
+                    self.wait = POLL_WAIT_STEPS;
+                    self.stage = Stage::Idle;
+                }
+            }
+            Stage::ReadCmdWait => {
+                let _ = unsafe { core::ptr::read_volatile(SPI_DR8) };
+                unsafe { core::ptr::write_volatile(SPI_DR8, CMD_NOP) };
+                self.stage = Stage::ReadPayload;
+            }
+            Stage::ReadPayload => {
+                let b = unsafe { core::ptr::read_volatile(SPI_DR8) };
+                self.data[(self.wbase + self.recvd) & MASK] = b;
+                self.recvd += 1;
+                if self.recvd < PAYLOAD_SIZE {
+                    unsafe { core::ptr::write_volatile(SPI_DR8, CMD_NOP) };
+                } else {
+                    unsafe { core::ptr::write_volatile(GPIOA_BSRR, CSN_HIGH) };
+                    self.count += PAYLOAD_SIZE;
+                    self.packets += 1;
+                    self.stage = Stage::Idle;
                 }
             }
         }
@@ -235,12 +201,7 @@ impl Rx {
             if bit == 17 {
                 self.next_sample();
             } else if DIAG != 3 {
-                let slot = bit & 7;
-                if slot == 2 {
-                    self.spi_rx_step();
-                } else if slot == 6 {
-                    self.spi_tx_step();
-                }
+                self.spi_step();
             }
         });
     }
@@ -295,10 +256,7 @@ async fn main(_spawner: Spawner) {
         tx: 0,
         tone_phase: 0,
         stage: Stage::Idle,
-        len: 0,
-        sent: 0,
         recvd: 0,
-        status: 0,
         wait: 0,
         wbase: 0,
         peak: 0,
