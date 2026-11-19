@@ -247,14 +247,13 @@ impl<'d> Nrf24<'d> {
             return false;
         }
 
+        // Single SPI transaction (command + 32 payload bytes) to keep CSN low as briefly as possible
+        let mut buf = [0xFFu8; PAYLOAD_SIZE + 1];
+        buf[0] = CMD_R_RX_PAYLOAD;
         self.csn.set_low();
-        let _ = self.spi.blocking_transfer_in_place(&mut [CMD_R_RX_PAYLOAD]);
-        for byte in out.iter_mut() {
-            let mut b = [0xFF];
-            let _ = self.spi.blocking_transfer_in_place(&mut b);
-            *byte = b[0];
-        }
+        let _ = self.spi.blocking_transfer_in_place(&mut buf);
         self.csn.set_high();
+        out.copy_from_slice(&buf[1..]);
 
         // Clear RX_DR flag in STATUS
         self.write_reg(REG_STATUS, 0x40);

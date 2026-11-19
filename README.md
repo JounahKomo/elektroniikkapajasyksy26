@@ -89,6 +89,7 @@ The objective of this project is to design and build a functional radiophone. Th
 │   │   ├── nrf24_test.rs    # NRF24L01 SPI communication and register verification test
 │   │   ├── nrf24_tx.rs      # NRF24L01 packet transmitter test (Enhanced ShockBurst TX)
 │   │   ├── nrf24_rx.rs      # NRF24L01 packet receiver test (Enhanced ShockBurst RX)
+│   │   ├── nrf24_audio_rx.rs # NRF24L01 audio receiver: plays received 8 kHz PCM packets on the speaker
 │   │   ├── speakers.rs      # MAX98357A I2S beep test (1 kHz sine tone on PA3/PA4/PA10)
 │   │   ├── audio_player.rs  # MAX98357A I2S audio file player (PA3/PA4/PA10)
 │   │   ├── mic_test.rs      # Microphone listen & speaker playback loop test (INMP441 + MAX98357A, auto-gain)
@@ -186,7 +187,13 @@ Connect the Nucleo-L432KC board via USB.
    ```
    Streams live microphone audio directly to the speaker in real-time with near-zero latency (~62.5 µs, 1 audio frame), high-pass DC blocking, and 64x digital amplification (the raw INMP441 signal is under 1% of full scale; lower `GAIN` in `mic_direct.rs` if it feeds back).
 
-10. **Run the Main Firmware**:
+10. **Run the NRF24L01 Audio Receiver**:
+    ```bash
+    cargo run --bin nrf24_audio_rx
+    ```
+    Listens on Channel 76 for audio packets and plays them on the MAX98357A speaker. Each 32-byte packet must carry 32 samples of 8-bit unsigned PCM (silence = 128) at 8 kHz (4 ms of audio), the same format as the `audio/*.raw` files. A 64 ms jitter buffer smooths packet timing; the log shows packets per second, buffer level, underruns and overruns once per second. A beep at start-up confirms the speaker path. Needs the radio wiring (SPI1) and the speaker wiring (PA3/PA4/PA10) at the same time; a transmitter sending audio packets is required to hear anything.
+
+11. **Run the Main Firmware**:
     ```bash
     cargo run
     ```
@@ -207,6 +214,7 @@ Connect the Nucleo-L432KC board via USB.
 - [x] MAX98357A I2S amplifier audio output driver (`speakers` beep test & `audio_player`)
 - [x] INMP441 I2S MEMS microphone capture and echo test (`mic_test`)
 - [x] Real-time direct microphone-to-speaker live feed (`mic_direct`)
+- [x] NRF24L01 audio packet receiver playing on the speaker (`nrf24_audio_rx`)
 - [ ] Push-to-Talk (PTT) button input handling with debouncing
 - [ ] Half-duplex transmit and receive state machine
 - [ ] Enclosure and final hardware assembly
