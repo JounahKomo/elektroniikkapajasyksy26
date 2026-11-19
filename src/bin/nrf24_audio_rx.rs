@@ -39,6 +39,14 @@ const VOLUME_SHIFT: u32 = 0;
 /// I2S frames (62.5 us each) between two radio polls: 8 = 0.5 ms.
 const POLL_INTERVAL: u32 = 8;
 
+/// Diagnostic mode (leave at 0 for normal operation):
+/// 0 = play the received audio.
+/// 1 = replace received audio by a 1 kHz tone while packets are playing (radio still polled).
+/// 2 = play the 1 kHz tone continuously and never touch the radio after start-up.
+const DIAG: u8 = 0;
+/// One period of a 1 kHz tone at 8 kHz.
+const TONE_8K: [i16; 8] = [0, 21213, 30000, 21213, 0, -21213, -30000, -21213];
+
 const CMD_NOP: u8 = 0xFF;
 const CMD_R_RX_PAYLOAD: u8 = 0x61;
 
@@ -91,9 +99,15 @@ impl Player {
                 self.underruns += 1;
                 self.led.set_low();
             }
-            self.sample = if self.playing {
+            self.sample = if DIAG == 2 {
+                TONE_8K[((self.frames >> 1) & 7) as usize]
+            } else if self.playing {
                 let v = ((self.pop() as i32) - 128) << (8 + VOLUME_SHIFT);
-                v.clamp(-32768, 32767) as i16
+                if DIAG == 1 {
+                    TONE_8K[((self.frames >> 1) & 7) as usize]
+                } else {
+                    v.clamp(-32768, 32767) as i16
+                }
             } else {
                 0
             };
@@ -208,6 +222,10 @@ async fn main(_spawner: Spawner) {
     let mut rx = [0u8; PAYLOAD_SIZE + 1];
 
     loop {
+        if DIAG == 2 {
+            player.frame(&mut audio);
+            continue;
+        }
         // Play audio frames with no radio activity at all in between
         for _ in 0..POLL_INTERVAL {
             player.frame(&mut audio);
