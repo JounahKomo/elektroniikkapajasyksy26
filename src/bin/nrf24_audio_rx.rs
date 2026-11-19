@@ -222,8 +222,6 @@ async fn main(_spawner: Spawner) {
 
     // Startup beep: confirms the speaker path works before any radio audio arrives
     audio.play_tone(1000, 150);
-    // Drop anything received while the beep was playing
-    radio.config_rx().await;
 
     // From here on the SPI is driven by the state machine inside the I2S bit loop.
     let mut poller = RadioPoller::new();
