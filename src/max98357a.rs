@@ -164,7 +164,7 @@ impl Max98357a {
     /// Returns `(left_sample, right_sample)`.
     #[inline(always)]
     pub fn exchange_frame(&mut self, left: u16, right: u16) -> (i16, i16) {
-        self.frame_core(left, right, false, None::<fn(i16) -> u16>).0
+        self.frame_core(left, right, false, None::<fn(i16) -> u16>, || {}).0
     }
 
     /// Transmit one frame (`tx` on both slots) and run `f` on the freshly received
@@ -178,7 +178,16 @@ impl Max98357a {
         use_right: bool,
         f: F,
     ) -> u16 {
-        self.frame_core(tx, tx, use_right, Some(f)).1
+        self.frame_core(tx, tx, use_right, Some(f), || {}).1
+    }
+
+    /// Transmit one frame like [`Self::exchange_frame`], calling `hook` once per BCLK bit in the
+    /// idle time after the rising edge (64 times per frame). This lets other work, such as a
+    /// register-level SPI state machine, make progress without ever stalling the I2S clocks.
+    /// `hook` must be very short (well under ~30 cycles) or bits are clocked late.
+    #[inline(always)]
+    pub fn exchange_frame_hook<H: FnMut()>(&mut self, left: u16, right: u16, hook: H) -> (i16, i16) {
+        self.frame_core(left, right, false, None::<fn(i16) -> u16>, hook).0
     }
 
     /// Core bit-banged I2S frame (64 BCLK).
@@ -188,12 +197,13 @@ impl Max98357a {
     /// The optional callback runs right after the mic sample has been fully received
     /// (bit 17 for the left slot, bit 49 for the right slot), in the idle time of a half bit.
     #[inline(always)]
-    fn frame_core<F: FnOnce(i16) -> u16>(
+    fn frame_core<F: FnOnce(i16) -> u16, H: FnMut()>(
         &mut self,
         left: u16,
         right: u16,
         mic_right: bool,
         mut cb: Option<F>,
+        mut hook: H,
     ) -> ((i16, i16), u16) {
         // Slot layout (bit 31 is transmitted first): 0, d15..d0, 0 x15
         let left_slot = (left as u32) << 15;
@@ -262,6 +272,8 @@ impl Max98357a {
                     next_tx = f(sample);
                 }
             }
+
+            hook();
 
             i += 1;
         }
