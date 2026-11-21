@@ -208,7 +208,19 @@ Connect the Nucleo-L432KC board via USB.
     ```
     Listens on Channel 76 for audio packets and plays them on the MAX98357A speaker. Each 32-byte packet must carry 32 samples of 8-bit unsigned PCM (silence = 128) at 8 kHz (4 ms of audio), the same format as the `audio/*.raw` files. The speaker is driven by the hardware-timed I2S driver (`i2s_dma.rs`): TIM2 generates BCLK on PA3 and DMA writes LRC/DIN, so the clocks stay perfectly regular while the radio is read with ordinary blocking SPI (the bit-banged driver could not keep its clocks regular while talking to the radio, and the amplifier muted). Same wiring as the other audio programs. A 64 ms jitter buffer smooths packet timing; the log shows packets per second, buffer level, peak sample level, underruns, overruns and the lowest I2S queue level once per second (it should stay close to 63 frames). A beep at start-up confirms the speaker path. Set `DIAG` in the source to 1 (test tone, radio untouched) or 2 (test tone while the radio is polled) when debugging the speaker path. Compatible with `nrf24_audio_file_tx` from the transmitter project. Needs the radio wiring (SPI1) and the speaker wiring (PA3/PA4/PA10) at the same time; a transmitter sending audio packets is required to hear anything.
 
-11. **Run the Main Firmware**:
+11. **Stream Live Microphone Audio over the Radio**:
+    ```bash
+    cargo run --bin nrf24_audio_tx
+    ```
+    Reads the INMP441 microphone (16 kHz, high-pass filtered, 64x gain, averaged down to 8 kHz) and sends it as 32-byte packets of 8-bit unsigned PCM on Channel 76. The mic is captured by hardware (`i2s_mic_dma.rs`: TIM2 generates BCLK/WS, DMA1 channels 1 and 2 drive WS and sample the mic data line), so radio SPI traffic never disturbs the audio clocks and no samples are lost. It transmits only while the push-to-talk button (PB1 to GND) is held, because an always-open mic near the receiver's speaker causes a rising feedback howl; set `REQUIRE_PTT = false` in the source to stream continuously. A noise gate (`GATE_OPEN` / `GATE_CLOSE` in the source) mutes the mic below speech level so faint speaker sound can't start a feedback loop; the log shows how much of the time the gate was open. Flash a second board with `nrf24_audio_rx` to hear it on the speaker. Wiring is the same as above (the MAX98357A does not need to be connected on the transmitter). RTT logs show ACK counts, mic peak level and capture overruns (should stay 0).
+
+12. **Stream an Audio File over the Radio**:
+    ```bash
+    cargo run --bin nrf24_audio_file_tx
+    ```
+    Sends `audio/audio_testi.raw` (8 kHz, 8-bit unsigned PCM) as 32-byte packets every 4 ms on Channel 76, repeating with a 2 s pause. Useful for testing `nrf24_audio_rx` without a microphone.
+
+13. **Run the Main Firmware**:
     ```bash
     cargo run
     ```
@@ -240,15 +252,3 @@ Connect the Nucleo-L432KC board via USB.
 ## License
 
 This project is created for educational purposes in the Elektroniikkapaja course at Aalto University.
-
-10. **Stream Live Microphone Audio over the Radio**:
-    ```bash
-    cargo run --bin nrf24_audio_tx
-    ```
-    Reads the INMP441 microphone (16 kHz, high-pass filtered, 64x gain, averaged down to 8 kHz) and sends it as 32-byte packets of 8-bit unsigned PCM on Channel 76. The mic is captured by hardware (`i2s_mic_dma.rs`: TIM2 generates BCLK/WS, DMA1 channels 1 and 2 drive WS and sample the mic data line), so radio SPI traffic never disturbs the audio clocks and no samples are lost. It transmits only while the push-to-talk button (PB1 to GND) is held, because an always-open mic near the receiver's speaker causes a rising feedback howl; set `REQUIRE_PTT = false` in the source to stream continuously. A noise gate (`GATE_OPEN` / `GATE_CLOSE` in the source) mutes the mic below speech level so faint speaker sound can't start a feedback loop; the log shows how much of the time the gate was open. Flash a second board with `nrf24_audio_rx` to hear it on the speaker. Wiring is the same as above (the MAX98357A does not need to be connected on the transmitter). RTT logs show ACK counts, mic peak level and capture overruns (should stay 0).
-
-11. **Stream an Audio File over the Radio**:
-    ```bash
-    cargo run --bin nrf24_audio_file_tx
-    ```
-    Sends `audio/audio_testi.raw` (8 kHz, 8-bit unsigned PCM) as 32-byte packets every 4 ms on Channel 76, repeating with a 2 s pause. Useful for testing `nrf24_audio_rx` without a microphone.
