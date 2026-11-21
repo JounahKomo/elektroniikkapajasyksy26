@@ -21,7 +21,7 @@
 
 use defmt::{error, info};
 use embassy_executor::Spawner;
-use embassy_stm32::gpio::{Level, Output, Speed};
+use embassy_stm32::gpio::{Input, Level, Output, Pull, Speed};
 use embassy_stm32::spi::{Config, Spi};
 use embassy_stm32::time::Hertz;
 use embassy_time::Timer;
@@ -31,13 +31,20 @@ use nucleo_l432kc_app::nrf24::{Nrf24, PAYLOAD_SIZE};
 use {defmt_rtt as _, panic_probe as _};
 
 /// Digital gain applied to the microphone (raw INMP441 speech is very quiet).
-const GAIN: i32 = 64;
+const GAIN: i32 = 32;
+/// Transmit only while the push-to-talk button (PB1 to GND, internal pull-up) is held.
+/// An always-open microphone next to the receiver's speaker howls (acoustic feedback).
+/// Set to false to stream continuously, e.g. when the boards are far apart.
+const REQUIRE_PTT: bool = true;
+/// PTT state must be stable for this many 4 ms packets (debounce).
+const PTT_DEBOUNCE: u8 = 5;
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     let p = embassy_stm32::init(config_80mhz());
 
     let mut led = Output::new(p.PB3, Level::Low, Speed::Low);
+    let ptt = Input::new(p.PB1, Pull::Up);
     let ce = Output::new(p.PB0, Level::Low, Speed::Low);
     let csn = Output::new(p.PA11, Level::High, Speed::High);
 
@@ -113,6 +120,8 @@ async fn main(_spawner: Spawner) {
     let mut sent_ok: u32 = 0;
     let mut no_ack: u32 = 0;
     let mut in_flight = false;
+    let mut talking = !REQUIRE_PTT;
+    let mut ptt_count: u8 = 0;
     let mut packets: u32 = 0;
 
     loop {
@@ -144,6 +153,27 @@ async fn main(_spawner: Spawner) {
         }
         n = 0;
 
+        // Push-to-talk with debounce, checked once per packet
+        if REQUIRE_PTT {
+            if ptt.is_low() != talking {
+                ptt_count += 1;
+                if ptt_count >= PTT_DEBOUNCE {
+                    talking = !talking;
+                    ptt_count = 0;
+                    info!("PTT {}", if talking { "pressed: transmitting" } else { "released: idle" });
+                }
+            } else {
+                ptt_count = 0;
+            }
+            if !talking {
+                if in_flight {
+                    let _ = radio.finish_send();
+                    in_flight = false;
+                }
+                continue;
+            }
+        }
+
         // Packet complete: collect the previous result, then start the next send
         if in_flight {
             match radio.finish_send() {
@@ -156,7 +186,7 @@ async fn main(_spawner: Spawner) {
         packets += 1;
 
         if packets >= 250 {
-            led.set_level(if sent_ok > no_ack { Level::High } else { Level::Low });
+            led.set_level(if talking && sent_ok > no_ack { Level::High } else { Level::Low });
             info!(
                 "Packets: {} acked, {} lost/no-ack | peak {} / 32767 | capture overruns {}",
                 sent_ok,
