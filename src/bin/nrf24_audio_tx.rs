@@ -30,19 +30,21 @@ use nucleo_l432kc_app::max98357a::config_80mhz;
 use nucleo_l432kc_app::nrf24::{Nrf24, PAYLOAD_SIZE};
 use {defmt_rtt as _, panic_probe as _};
 
-/// Digital gain applied to the microphone (raw INMP441 speech is very quiet).
-const GAIN: i32 = 32;
+/// Digital gain applied to the microphone (1 = none). Lower it if speech clips (the log
+/// shows `peak` out of 32767), raise it if the audio is too quiet. The gate thresholds
+/// below scale with it automatically.
+const GAIN: i32 = 8;
 /// Transmit only while the push-to-talk button (PB1 to GND, internal pull-up) is held.
 /// An always-open microphone next to the receiver's speaker howls (acoustic feedback).
 /// Set to false to stream continuously, e.g. when the boards are far apart.
 const REQUIRE_PTT: bool = false;
 /// Noise gate: the microphone is muted until the signal envelope exceeds `GATE_OPEN`, and
-/// muted again when it falls below `GATE_CLOSE` (units: 16-bit sample after gain, full
-/// scale 32767). Speech after 32x gain is in the thousands; room noise and faint speaker
-/// sound picked up from the receiver are well below. Raise both if feedback still builds,
-/// lower them if quiet speech gets cut off. Set `GATE_OPEN` to 0 to disable the gate.
-const GATE_OPEN: i32 = 1_500;
-const GATE_CLOSE: i32 = 700;
+/// muted again when it falls below `GATE_CLOSE`. Room noise and faint speaker sound picked
+/// up from the receiver should stay below, speech above. Raise both if feedback still
+/// builds, lower them if quiet speech gets cut off. Set `GATE_OPEN` to 0 to disable it.
+/// The thresholds are given for the *raw* microphone level and multiplied by `GAIN`.
+const GATE_OPEN: i32 = 531 * GAIN;
+const GATE_CLOSE: i32 = 22 * GAIN;
 /// PTT state must be stable for this many 4 ms packets (debounce).
 const PTT_DEBOUNCE: u8 = 5;
 
