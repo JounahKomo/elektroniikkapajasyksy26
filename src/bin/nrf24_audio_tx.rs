@@ -12,31 +12,26 @@
 //! Microphone (I2S): SCK = PA3, WS = PA4, SD = PA1 (L/R pin to GND or 3.3V, auto-detected).
 //! Status LED: PB3 (LD3), lit while the radio is acknowledging packets.
 //!
-//! The I2S clocks are bit-banged at 16 kHz and must run continuously. The mic is decimated
-//! 2:1 (average of two frames) to 8 kHz and the radio is driven without waiting: one packet
-//! is started every 4 ms and its ACK result is collected before the next one. Starting a
-//! packet costs ~150 us during which no I2S frames are generated, so fewer than 32 samples
-//! are taken from the mic per packet (measured each packet from the DWT cycle counter) and
-//! the remainder is filled by repeating the last sample. This keeps the average rate at
-//! 8 kHz so the receiver's jitter buffer neither fills nor drains.
+//! The microphone is captured by hardware: TIM2 generates BCLK/WS and DMA samples the mic
+//! data line ([`i2s_mic_dma`]), so radio SPI traffic can never disturb the audio clocks
+//! and no samples are lost. The 16 kHz mic stream is averaged 2:1 down to 8 kHz and every
+//! 32 samples are sent as one packet (the non-blocking `start_send` / `finish_send`).
+//!
+//! [`i2s_mic_dma`]: nucleo_l432kc_app::i2s_mic_dma
 
-use core::cell::Cell;
-use cortex_m::peripheral::DWT;
 use defmt::{error, info};
 use embassy_executor::Spawner;
 use embassy_stm32::gpio::{Level, Output, Speed};
 use embassy_stm32::spi::{Config, Spi};
 use embassy_stm32::time::Hertz;
-use nucleo_l432kc_app::max98357a::{config_80mhz, Max98357a, SYSCLK_HZ};
+use embassy_time::Timer;
+use nucleo_l432kc_app::i2s_mic_dma::I2sMicDma;
+use nucleo_l432kc_app::max98357a::config_80mhz;
 use nucleo_l432kc_app::nrf24::{Nrf24, PAYLOAD_SIZE};
 use {defmt_rtt as _, panic_probe as _};
 
 /// Digital gain applied to the microphone (raw INMP441 speech is very quiet).
 const GAIN: i32 = 64;
-/// Target packet period in CPU cycles (4 ms).
-const PERIOD_CYCLES: u32 = SYSCLK_HZ / 250;
-/// Cycles of one 8 kHz sample (2 I2S frames of 4,992 cycles).
-const SAMPLE_CYCLES: u32 = 2 * 4_992;
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
@@ -60,27 +55,38 @@ async fn main(_spawner: Spawner) {
         error!("Failed to initialize NRF24L01! Check wiring, 3.3V power, and GND.");
         loop {
             led.toggle();
-            embassy_time::Timer::after_millis(100).await;
+            Timer::after_millis(100).await;
         }
     }
     radio.config_tx().await;
     info!("Radio configured as transmitter on channel 76.");
 
-    // Clock-only use of the amplifier pins: PA10 (DIN) just outputs silence
-    let mut mic = Max98357a::new_with_mic(p.PA3, p.PA4, p.PA10, p.PA1);
+    // Hardware I2S clocks + microphone capture (TIM2 + DMA1 channels 1 and 2)
+    let mut mic = I2sMicDma::new(p.TIM2, p.PA3, p.PA4, p.PA10, p.PA1, p.DMA1_CH2, p.DMA1_CH1);
 
-    // Keep clocks running so the INMP441 finishes its startup filter, and detect whether
-    // L/R is tied to GND (left) or VDD (right).
+    // Let the capture ring fill, then locate the frame boundary
+    Timer::after_millis(20).await;
+    if !mic.sync() {
+        error!("No I2S word-select edge found in the capture buffer!");
+    }
+
+    // Warm up (INMP441 start-up filter takes ~350 ms) and detect L/R: GND = left, VDD = right
     info!("Warming up microphone (350 ms)...");
     let mut left_warmup = 0u32;
     let mut right_warmup = 0u32;
-    for _ in 0..(16_000 * 350) / 1000 {
-        let (l, r) = mic.exchange_frame(0, 0);
-        if l != 0 {
-            left_warmup += 1;
-        }
-        if r != 0 {
-            right_warmup += 1;
+    let mut frames = 0u32;
+    while frames < 16_000 * 350 / 1000 {
+        match mic.poll_frame() {
+            Some((l, r)) => {
+                frames += 1;
+                if l != 0 {
+                    left_warmup += 1;
+                }
+                if r != 0 {
+                    right_warmup += 1;
+                }
+            }
+            None => Timer::after_micros(500).await,
         }
     }
     if left_warmup == 0 && right_warmup == 0 {
@@ -98,54 +104,47 @@ async fn main(_spawner: Spawner) {
     // DC-blocking high-pass filter state: y[n] = x[n] - x[n-1] + 253/256 * y[n-1]
     let mut prev_x = 0i32;
     let mut prev_y = 0i32;
-    let peak = Cell::new(0i32);
+    let mut peak = 0i32;
 
     let mut payload = [128u8; PAYLOAD_SIZE];
+    let mut n = 0usize; // samples in the current packet
+    let mut half = false; // first of the two frames of an 8 kHz sample already seen
+    let mut acc = 0i32;
     let mut sent_ok: u32 = 0;
     let mut no_ack: u32 = 0;
     let mut in_flight = false;
     let mut packets: u32 = 0;
-    let mut real_samples_total: u32 = 0;
-    // Cost of one radio exchange in cycles; measured, starts with a conservative guess
-    let mut send_cost: u32 = 16_000;
 
     loop {
-        let packet_start = DWT::cycle_count();
+        let Some((l, r)) = mic.poll_frame() else {
+            // Nothing new: yield briefly (a frame takes 62 us)
+            Timer::after_micros(100).await;
+            continue;
+        };
 
-        // 1. Collect mic samples (2 I2S frames each) until the time budget of this packet
-        //    is used up (period minus the measured radio cost), at most 32 samples.
-        let mut n = 0usize;
-        while n < PAYLOAD_SIZE
-            && (DWT::cycle_count().wrapping_sub(packet_start))
-                .saturating_add(SAMPLE_CYCLES + send_cost)
-                <= PERIOD_CYCLES
-        {
-            let mut acc = 0i32;
-            for _ in 0..2 {
-                let (l, r) = mic.exchange_frame(0, 0);
-                let x = (if use_right { r } else { l }) as i32;
-                let y = x - prev_x + ((prev_y * 253) >> 8);
-                prev_x = x;
-                prev_y = y;
-                let out = (y * GAIN).clamp(-32767, 32767);
-                acc += out;
-                if out.abs() > peak.get() {
-                    peak.set(out.abs());
-                }
-            }
-            // Average of two frames = simple anti-alias filter; 16-bit -> unsigned 8-bit
-            payload[n] = (((acc >> 1) >> 8) + 128).clamp(0, 255) as u8;
-            n += 1;
-        }
-        real_samples_total += n as u32;
-        // Pad the remaining samples by repeating the last one (or silence)
-        let pad = if n > 0 { payload[n - 1] } else { 128 };
-        for s in payload[n..].iter_mut() {
-            *s = pad;
-        }
+        let x = (if use_right { r } else { l }) as i32;
+        let y = x - prev_x + ((prev_y * 253) >> 8);
+        prev_x = x;
+        prev_y = y;
+        let out = (y * GAIN).clamp(-32767, 32767);
+        peak = peak.max(out.abs());
+        acc += out;
 
-        // 2. Collect the previous packet's result, then start the next one (non-blocking)
-        let t0 = DWT::cycle_count();
+        if !half {
+            half = true;
+            continue;
+        }
+        half = false;
+        // Average of two frames = simple anti-alias filter; 16-bit -> unsigned 8-bit
+        payload[n] = (((acc >> 1) >> 8) + 128).clamp(0, 255) as u8;
+        acc = 0;
+        n += 1;
+        if n < PAYLOAD_SIZE {
+            continue;
+        }
+        n = 0;
+
+        // Packet complete: collect the previous result, then start the next send
         if in_flight {
             match radio.finish_send() {
                 Some(true) => sent_ok += 1,
@@ -153,27 +152,22 @@ async fn main(_spawner: Spawner) {
             }
         }
         radio.start_send(&payload);
-        send_cost = DWT::cycle_count().wrapping_sub(t0);
         in_flight = true;
         packets += 1;
 
-        // 3. Statistics once per second (250 packets)
         if packets >= 250 {
             led.set_level(if sent_ok > no_ack { Level::High } else { Level::Low });
             info!(
-                "Packets: {} acked, {} lost/no-ack | peak {} / 32767 | avg {} real samples/packet | radio {} cycles | late bits {}",
+                "Packets: {} acked, {} lost/no-ack | peak {} / 32767 | capture overruns {}",
                 sent_ok,
                 no_ack,
-                peak.get(),
-                real_samples_total / packets,
-                send_cost,
-                mic.late_bits()
+                peak,
+                mic.overruns()
             );
             packets = 0;
             sent_ok = 0;
             no_ack = 0;
-            real_samples_total = 0;
-            peak.set(0);
+            peak = 0;
         }
     }
 }

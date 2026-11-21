@@ -109,6 +109,7 @@ PB1 was chosen because it is a plain GPIO that is not used by anything else in t
 │   │   └── mic_direct.rs    # Real-time direct microphone-to-speaker pass-through (~62.5 µs latency, 64x gain)
 │   ├── lib.rs           # Library root exporting reusable modules
 │   ├── i2s_dma.rs       # Hardware-timed I2S output to the MAX98357A (TIM2 BCLK + DMA, same pins)
+│   ├── i2s_mic_dma.rs   # Hardware-timed I2S clocks + INMP441 capture (TIM2 + DMA1 CH1/CH2)
 │   ├── max98357a.rs     # MAX98357A & INMP441 I2S audio driver (cycle-accurate DWT timing)
 │   ├── nrf24.rs         # NRF24L01 driver module (registers, TX/RX configuration, packet handling)
 │   └── main.rs          # Main radiophone firmware application
@@ -244,7 +245,7 @@ This project is created for educational purposes in the Elektroniikkapaja course
     ```bash
     cargo run --bin nrf24_audio_tx
     ```
-    Reads the INMP441 microphone (16 kHz, high-pass filtered, 64x gain, averaged down to 8 kHz) and sends it as 32-byte packets of 8-bit unsigned PCM on Channel 76 using non-blocking radio sends, so the I2S clocks stay regular. Flash a second board with `nrf24_audio_rx` to hear it on the speaker. Wiring is the same as above (the MAX98357A does not need to be connected on the transmitter). RTT logs show ACK counts, mic peak level and the average number of real samples per packet (the rest is padded).
+    Reads the INMP441 microphone (16 kHz, high-pass filtered, 64x gain, averaged down to 8 kHz) and sends it as 32-byte packets of 8-bit unsigned PCM on Channel 76. The mic is captured by hardware (`i2s_mic_dma.rs`: TIM2 generates BCLK/WS, DMA1 channels 1 and 2 drive WS and sample the mic data line), so radio SPI traffic never disturbs the audio clocks and no samples are lost. Flash a second board with `nrf24_audio_rx` to hear it on the speaker. Wiring is the same as above (the MAX98357A does not need to be connected on the transmitter). RTT logs show ACK counts, mic peak level and capture overruns (should stay 0).
 
 11. **Stream an Audio File over the Radio**:
     ```bash
