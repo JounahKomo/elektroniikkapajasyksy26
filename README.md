@@ -29,7 +29,7 @@ The objective of this project is to design and build a functional radiophone. Th
 - **Logging & Diagnostics**: [`defmt`](https://github.com/knurling-rs/defmt) over RTT (`defmt-rtt`)
 - **Flashing & Debugging**: [`probe-rs`](https://probe.rs/)
 - **Linker & Stack Protection**: [`flip-link`](https://github.com/knurling-rs/flip-link)
-- **Development Assistant**: Antigravity (agentic workflows for bringup, scaffolding, and verification)
+- **Development Assistants**: Antigravity and Claude Code (agentic workflows for bringup, scaffolding, and verification)
 
 ---
 
