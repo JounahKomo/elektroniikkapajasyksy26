@@ -101,6 +101,7 @@ PB1 was chosen because it is a plain GPIO that is not used by anything else in t
 │   │   ├── nrf24_tx.rs      # NRF24L01 packet transmitter test (Enhanced ShockBurst TX)
 │   │   ├── nrf24_rx.rs      # NRF24L01 packet receiver test (Enhanced ShockBurst RX)
 │   │   ├── nrf24_audio_rx.rs # NRF24L01 audio receiver: plays received 8 kHz PCM packets on the speaker
+│   │   ├── nrf24_audio_file_tx.rs # NRF24L01 audio transmitter: streams audio_testi.raw in a loop to nrf24_audio_rx
 │   │   ├── nrf24_audio_tx.rs # NRF24L01 audio transmitter: streams live INMP441 microphone audio (8 kHz PCM) to nrf24_audio_rx
 │   │   ├── speakers.rs      # MAX98357A I2S beep test (1 kHz sine tone on PA3/PA4/PA10)
 │   │   ├── audio_player.rs  # MAX98357A I2S audio file player (PA3/PA4/PA10)
@@ -244,3 +245,9 @@ This project is created for educational purposes in the Elektroniikkapaja course
     cargo run --bin nrf24_audio_tx
     ```
     Reads the INMP441 microphone (16 kHz, high-pass filtered, 64x gain, averaged down to 8 kHz) and sends it as 32-byte packets of 8-bit unsigned PCM on Channel 76 using non-blocking radio sends, so the I2S clocks stay regular. Flash a second board with `nrf24_audio_rx` to hear it on the speaker. Wiring is the same as above (the MAX98357A does not need to be connected on the transmitter). RTT logs show ACK counts, mic peak level and the average number of real samples per packet (the rest is padded).
+
+11. **Stream an Audio File over the Radio**:
+    ```bash
+    cargo run --bin nrf24_audio_file_tx
+    ```
+    Sends `audio/audio_testi.raw` (8 kHz, 8-bit unsigned PCM) as 32-byte packets every 4 ms on Channel 76, repeating with a 2 s pause. Useful for testing `nrf24_audio_rx` without a microphone.
