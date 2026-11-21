@@ -36,15 +36,15 @@ The objective of this project is to design and build a functional radiophone. Th
 ## Pinout and Wiring Reference
 
 ### 1. NRF24L01 (2.4 GHz RF Transceiver – SPI1)
-| NRF24L01 Pin | Nucleo-L432KC Pin | Description / Function |
+| NRF24L01 Pin | Nucleo-L432KC Pin / Connection | Description / Function |
 | :--- | :--- | :--- |
 | **VCC** | **3.3V** | Power supply (3.3V only! Do not connect to 5V) |
 | **GND** | **GND** | Ground |
-| **SCK** | **PA5** | SPI1 SCK (D13) |
-| **MISO** | **PA6** | SPI1 MISO (D12) |
-| **MOSI** | **PA7** | SPI1 MOSI (D11) |
-| **CSN** | **PA11** | SPI Chip Select (D10) |
-| **CE** | **PB0** | Chip Enable (D9) |
+| **SCK** | **PA5** (A4) | SPI1 SCK (CN4 pin 8) |
+| **MISO** | **PA6** (A5) | SPI1 MISO (CN4 pin 7) |
+| **MOSI** | **PA7** (A6) | SPI1 MOSI (CN4 pin 6) |
+| **CSN** | **PA11** (D10) | SPI Chip Select (CN3 pin 13) |
+| **CE** | **PB0** (D3) | Chip Enable (CN3 pin 6) |
 
 ### 2. INMP441 (I2S MEMS Microphone)
 | INMP441 Pin | Nucleo-L432KC Pin / Connection | Description / Function |
