@@ -233,6 +233,47 @@ impl<'d> Nrf24<'d> {
         Err(TxError::Timeout)
     }
 
+    /// Non-blocking transmit: loads the payload, pulses CE and returns immediately
+    /// (roughly 100 us). The caller must later call [`Nrf24::finish_send`].
+    /// Intended for real-time streaming where the CPU cannot wait for the ACK.
+    pub fn start_send(&mut self, payload: &[u8; PAYLOAD_SIZE]) {
+        self.ce.set_low();
+        self.write_reg(REG_STATUS, 0x70);
+        self.send_command(CMD_FLUSH_TX);
+
+        // Single SPI transaction: command + 32 payload bytes
+        let mut buf = [0u8; PAYLOAD_SIZE + 1];
+        buf[0] = CMD_W_TX_PAYLOAD;
+        buf[1..].copy_from_slice(payload);
+        self.csn.set_low();
+        let _ = self.spi.blocking_transfer_in_place(&mut buf);
+        self.csn.set_high();
+
+        // CE high for >= 15 us (1600 cycles = 20 us at 80 MHz)
+        self.ce.set_high();
+        cortex_m::asm::delay(1600);
+        self.ce.set_low();
+    }
+
+    /// Collects the result of [`Nrf24::start_send`]. Returns `Some(true)` if the packet was
+    /// acknowledged, `Some(false)` if retries ran out, and `None` if it is still in flight
+    /// (in which case the pending packet is discarded).
+    pub fn finish_send(&mut self) -> Option<bool> {
+        let status = self.read_reg(REG_STATUS);
+        let result = if (status & 0x20) != 0 {
+            Some(true)
+        } else if (status & 0x10) != 0 {
+            Some(false)
+        } else {
+            None
+        };
+        if result != Some(true) {
+            self.send_command(CMD_FLUSH_TX);
+        }
+        self.write_reg(REG_STATUS, 0x70);
+        result
+    }
+
     /// Checks if a payload is available in the RX FIFO.
     pub fn is_rx_data_ready(&mut self) -> bool {
         let status = self.read_reg(REG_STATUS);
