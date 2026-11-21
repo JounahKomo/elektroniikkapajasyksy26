@@ -35,7 +35,14 @@ const GAIN: i32 = 32;
 /// Transmit only while the push-to-talk button (PB1 to GND, internal pull-up) is held.
 /// An always-open microphone next to the receiver's speaker howls (acoustic feedback).
 /// Set to false to stream continuously, e.g. when the boards are far apart.
-const REQUIRE_PTT: bool = true;
+const REQUIRE_PTT: bool = false;
+/// Noise gate: the microphone is muted until the signal envelope exceeds `GATE_OPEN`, and
+/// muted again when it falls below `GATE_CLOSE` (units: 16-bit sample after gain, full
+/// scale 32767). Speech after 32x gain is in the thousands; room noise and faint speaker
+/// sound picked up from the receiver are well below. Raise both if feedback still builds,
+/// lower them if quiet speech gets cut off. Set `GATE_OPEN` to 0 to disable the gate.
+const GATE_OPEN: i32 = 1_500;
+const GATE_CLOSE: i32 = 700;
 /// PTT state must be stable for this many 4 ms packets (debounce).
 const PTT_DEBOUNCE: u8 = 5;
 
@@ -112,6 +119,11 @@ async fn main(_spawner: Spawner) {
     let mut prev_x = 0i32;
     let mut prev_y = 0i32;
     let mut peak = 0i32;
+    // Noise gate state: envelope follower and gate gain (0..=256)
+    let mut env = 0i32;
+    let mut gate_open = GATE_OPEN == 0;
+    let mut gate_gain = if GATE_OPEN == 0 { 256i32 } else { 0 };
+    let mut open_samples: u32 = 0;
 
     let mut payload = [128u8; PAYLOAD_SIZE];
     let mut n = 0usize; // samples in the current packet
@@ -145,8 +157,29 @@ async fn main(_spawner: Spawner) {
         }
         half = false;
         // Average of two frames = simple anti-alias filter; 16-bit -> unsigned 8-bit
-        payload[n] = (((acc >> 1) >> 8) + 128).clamp(0, 255) as u8;
+        let mut v = acc >> 1;
         acc = 0;
+        if GATE_OPEN != 0 {
+            let a = v.abs();
+            // Instant attack, release of about 60 ms (1/512 per sample at 8 kHz)
+            env = if a > env { a } else { env - (env >> 9) };
+            if !gate_open && env > GATE_OPEN {
+                gate_open = true;
+            } else if gate_open && env < GATE_CLOSE {
+                gate_open = false;
+            }
+            // Gain ramps: open in ~1 ms, close in ~30 ms, so there are no clicks
+            gate_gain = if gate_open {
+                (gate_gain + 32).min(256)
+            } else {
+                (gate_gain - 8).max(0)
+            };
+            v = (v * gate_gain) >> 8;
+            if gate_gain > 0 {
+                open_samples += 1;
+            }
+        }
+        payload[n] = ((v >> 8) + 128).clamp(0, 255) as u8;
         n += 1;
         if n < PAYLOAD_SIZE {
             continue;
@@ -188,16 +221,18 @@ async fn main(_spawner: Spawner) {
         if packets >= 250 {
             led.set_level(if talking && sent_ok > no_ack { Level::High } else { Level::Low });
             info!(
-                "Packets: {} acked, {} lost/no-ack | peak {} / 32767 | capture overruns {}",
+                "Packets: {} acked, {} lost/no-ack | peak {} / 32767 | gate open {}% | capture overruns {}",
                 sent_ok,
                 no_ack,
                 peak,
+                open_samples / 80,
                 mic.overruns()
             );
             packets = 0;
             sent_ok = 0;
             no_ack = 0;
             peak = 0;
+            open_samples = 0;
         }
     }
 }
